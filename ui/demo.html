@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DCS ILARTS console (demo)</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>html,body{margin:0;height:100%;background:#0B0D0F}</style>
+</head>
+<body>
+<!-- A web host in miniature: stand-in pictures instead of streams, and a state object kept here.
+     Query parameters: ?native shows the desktop arrangement (screens cut open) over a test pattern; ?fit sizes
+     the console to the window; ?layout=1|2|q picks the monitor layout; ?flir shows the experimental FLIR key (on for the island camera); ?a=<source>&b=<source> what monitors A
+     and B show. -->
+<ilarts-console id="c"></ilarts-console>
+<script>
+const Q = new URLSearchParams(location.search);
+if (Q.has('native')) {
+  document.getElementById('c').setAttribute('native-video', '');
+  document.body.style.background = 'repeating-linear-gradient(45deg,#284 0 20px,#162 20px 40px)';
+}
+if (Q.has('fit')) document.getElementById('c').setAttribute('fit', '');
+</script>
+<script src="ilarts-console.js"></script>
+<script>
+const el = document.getElementById('c');
+// sources: id, button name, key, plate, picture file, levels group, PTZ camera
+const SRC = [['plat', 'PLAT', '1', 'PLAT CAMERA', 'plat', 'PLAT · LSO 1', false], ['lso1', 'LSO 1', '2', 'LSO CAMERA 1', 'lso1', 'PLAT · LSO 1', false],
+             ['lso2', 'LSO 2', '3', 'LSO CAMERA 2', 'lso2', null, false], ['island', 'ISLAND', '4', 'ISLAND CAMERA', 'island', 'ISLAND', true],
+             ['bow_bubble', 'BOW', '5', 'BOW BUBBLE CAMERA', 'cat', 'BOW BUBBLE', true]];
+const S = {
+  layout: Q.get('layout') || '2', mon: [Q.get('a') || 'plat', Q.get('b') || 'island'],
+  levels: { 'PLAT · LSO 1': { exp: 0.9, bri: 0.13, con: 1.5, gam: 1.2, auto: true }, ISLAND: { exp: -0.2, bri: 0, con: 1, gam: 1, auto: false },
+            'BOW BUBBLE': { exp: 0, bri: 0, con: 1, gam: 1, auto: false } },
+  ships: { 'Naval-1-1': true, 'Naval-2-1': false }, cams: { island: true, bow_bubble: true }, arm: { plat: true, island: true },
+  mode: 'auto', rec: false, play: false, bb: true, streams: ['off', 'off', 'off', 'off'], preset: 0, flir: { island: Q.has('flir') },
+};
+const live = id => !(id in S.cams) || S.cams[id];
+const src = id => SRC.find(x => x[0] === id) || SRC[0];
+function monitor(u) {
+  const [id, name, , plate, , group, ptz] = src(S.mon[u]), L = group && S.levels[group];
+  const pad = n => String(n).padStart(2, '0'), d = new Date();
+  return {
+    id, name, plate, res: '768×768 · 60 FPS', signal: live(id), message: live(id) ? '' : 'CAMERA OFF', crosshair: id === 'plat', burnIns: ptz, rec: !!S.arm[id],
+    time: `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}-${pad(d.getUTCFullYear() % 100)}  ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`,
+    ship: S.ships['Naval-1-1'] ? 'CVN-72' : 'CVN-71',
+    picture: L ? { group, auto: L.auto, autoRange: L.auto ? '0.048 – 0.909' : '', exp: L.exp, bri: L.bri, con: L.con, gam: L.gam, unavailable: { exp: id === 'lso1' } }
+               : { unavailable: { auto: true, reset: true, exp: true, bri: true, con: true, gam: true } },
+    ptz: ptz ? { id, name: name.slice(0, 3), live: live(id), manual: false, pan: 0, tilt: 0, zoom: 1, flirAvail: Q.has('flir'), flir: !!S.flir[id] } : null,
+  };
+}
+function push() {
+  el.state = {
+    status: src(S.mon[0])[1] + ' · 768×768 · 60 FPS', layout: S.layout,
+    monitors: [monitor(0), monitor(1)],
+    sources: SRC.map(([id, name, key, plate]) => ({ id, name, key, plate, signal: live(id), selected: id === S.mon[0], rec: !!S.arm[id], fps: live(id) ? 60 : 0 })),
+    ships: [{ id: 'Naval-1-1', unit: 'NAVAL-1-1', hull: 'CVN-72', on: S.ships['Naval-1-1'] }, { id: 'Naval-2-1', unit: 'NAVAL-2-1', hull: 'CVN-71', on: S.ships['Naval-2-1'] }],
+    presets: [{ name: 'Night', key: 'F5', saved: true, active: S.preset === 0 }, { name: '1', key: 'F6', saved: true, active: S.preset === 1 },
+              { name: '2', key: 'F7', saved: false }, { name: '3', key: 'F8', saved: false }],
+    cameras: [{ id: 'island', name: 'Island', on: S.cams.island, live: S.cams.island }, { id: 'bow_bubble', name: 'Bow bubble', on: S.cams.bow_bubble, live: S.cams.bow_bubble }],
+    vtr: { counter: S.play ? '00:00:07' : S.rec ? '00:01:12' : '00:00:00', mode: S.mode, rec: S.rec, play: S.play, replayTime: '−00:38', canSave: S.play,
+           line1: S.play ? 'REPLAY · LAST PASS · −00:38' : S.rec ? 'RECORDING · ' + src(S.mon[0])[1] : S.mode === 'auto' ? 'AUTO · WAITING FOR AN APPROACH' : 'MANUAL · STANDBY',
+           line2: 'BUFFER · KEEPS THE LAST 45 S' },
+    bb: { on: S.bb, text: S.bb ? 'KEEPS THE LAST 5 MIN · 4:59 · 95 MB' : 'BLACK BOX OFF' }, stream: { on: S.streams.some(x => x !== 'off'), state: S.streams.some(x => x !== 'off') ? 'live' : 'off', text: S.streams.map((x, n) => x === 'off' ? '' : `${n + 1} · 2.5 MBIT/S`).filter(Boolean).join('\n'), targets: S.streams.map((x, n) => ({ set: n < 3, state: x })) },
+  };
+}
+el.addEventListener('command', e => {
+  const c = e.detail, u = c.mon || 0, group = src(S.mon[u])[5];
+  if (c.cmd === 'source') S.mon[u] = c.id;
+  else if (c.cmd === 'wall') S.layout = c.mode;
+  else if (c.cmd === 'swap') S.mon = [S.mon[1], S.mon[0]];
+  else if (c.cmd === 'ship') S.ships[c.id] = !S.ships[c.id];
+  else if (c.cmd === 'camera') S.cams[c.id] = !S.cams[c.id];
+  else if (c.cmd === 'ptzFlir') S.flir[c.cam] = !S.flir[c.cam];
+  else if (c.cmd === 'recArm') S.arm[c.id] = !S.arm[c.id];
+  else if (c.cmd === 'knob' && group) S.levels[group][c.key] = c.value;
+  else if (c.cmd === 'auto' && group) S.levels[group].auto = !S.levels[group].auto;
+  else if (c.cmd === 'reset' && group) Object.assign(S.levels[group], { exp: 0, bri: 0, con: 1, gam: 1 });
+  else if (c.cmd === 'preset') S.preset = c.index;
+  else if (c.cmd === 'mode') S.mode = c.auto ? 'auto' : 'manual';
+  else if (c.cmd === 'rec') { S.rec = !S.rec; S.play = false; }
+  else if (c.cmd === 'play') S.play = !S.play;
+  else if (c.cmd === 'stop') S.rec = S.play = false;
+  else if (c.cmd === 'stream') S.streams = S.streams.map((x, n) => (c.n == null ? n < 3 : n === c.n) ? (c.on ? 'live' : 'off') : x);
+  else if (c.cmd === 'bb') S.bb = !S.bb;
+  else if (c.cmd === 'layout') { console.log('layout', JSON.stringify(c.rects)); return; }
+  push();
+  pictures();
+});
+const img = name => Object.assign(new Image(), { src: 'demo-img/' + name + '.jpg' });
+function pictures() {
+  if (el.hasAttribute('native-video')) return;
+  SRC.forEach(([id, , , , file]) => el.setVideo(id, img(file)));
+  el.setVideo('program', img(src(S.mon[0])[4]));
+  el.setVideo('second', img(src(S.mon[1])[4]));
+}
+push();
+pictures();
+setInterval(push, 1000);
+</script>
+</body>
+</html>

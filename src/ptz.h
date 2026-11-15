@@ -1,0 +1,85 @@
+// Pan motion of a PTZ camera: fixed rate with a short ramp up and down, in moves.
+//
+// The camera stays where it is until the target is more than `deadband` off its aim. Then it pans toward the
+// target: the rate ramps up (rate / ramp per second) to the fixed rate, holds it, and ramps down so that it
+// stops where the target was when the ramp down began. It then waits until the target is off by more than
+// the deadband again. A target that moves faster than the fixed rate is followed at the fixed rate, lagging;
+// a slow one is followed in short moves. So the target is not always centred - as with a real camera on a
+// pan head. Pure arithmetic (used by extra_cams.cpp and by the offline test).
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+
+namespace lsodiag {
+
+struct PanState {
+    double pan = 0;    // rad
+    double rate = 0;   // rad/s, signed
+    int phase = 0;     // 0 idle, 1 moving at / toward the fixed rate, 2 ramping down onto `goal`
+    double goal = 0;   // rad: where the ramp down ends
+};
+
+inline double PanWrap(double a) {  // into (-pi, pi]
+    const double kPi = 3.14159265358979323846;
+    a = std::fmod(a + kPi, 2 * kPi);
+    if (a <= 0) a += 2 * kPi;
+    return a - kPi;
+}
+
+// One step of dt seconds toward `target` (rad). rate (rad/s) and ramp (s) as configured; deadband (rad): how
+// far the target may be off before a move starts (0 = go there: used for the return to the rest view).
+// only: +1 / -1 = moves start only toward larger / smaller pan angles (a target on the other side is left alone;
+// a move under way ramps down), 0 = both ways.
+inline void PanStep(PanState& s, double target, double deadband, double rate, double ramp, double dt, int only = 0) {
+    if (!(dt > 0) || !(rate > 0)) return;
+    const double acc = rate / std::max(ramp, 0.02);
+    const double eps = 1e-4;  // rad (0.006 deg): there
+    double e = PanWrap(target - s.pan);
+    if (only != 0 && e * only < 0) {  // the target is on the side the camera does not pan to
+        if (s.phase == 0) return;
+        if (s.phase == 1) {
+            const double stop = s.rate * s.rate / (2 * acc);
+            s.phase = 2;
+            s.goal = s.pan + (s.rate > 0 ? stop : -stop);
+        }
+        e = 0;
+    }
+    if (s.phase == 0) {
+        if (std::fabs(e) <= std::max(deadband, eps)) return;
+        s.phase = 1;
+    }
+    double want = 0;
+    if (s.phase == 1) {
+        const double dir = e >= 0 ? 1.0 : -1.0;
+        const double stop = s.rate * s.rate / (2 * acc);  // angle needed to ramp down from the current rate
+        if (s.rate * dir < 0) {
+            // the target is now on the other side: ramp down first, where the current motion ends
+            s.phase = 2;
+            s.goal = s.pan + (s.rate > 0 ? stop : -stop);
+        } else if (std::fabs(e) <= stop + std::fabs(s.rate) * dt) {
+            s.phase = 2;
+            s.goal = s.pan + e;  // where the target is now
+        } else {
+            want = dir * rate;
+        }
+    }
+    if (s.phase == 2) {
+        const double eg = PanWrap(s.goal - s.pan);
+        const double v = std::sqrt(2 * acc * std::fabs(eg));  // the rate from which a constant ramp down ends on the goal
+        if (std::fabs(eg) <= eps || (v * dt >= std::fabs(eg) && std::fabs(s.rate) <= 3 * acc * dt)) {
+            s.pan = s.goal;
+            s.rate = 0;
+            s.phase = 0;
+            return;
+        }
+        want = (eg >= 0 ? 1.0 : -1.0) * std::min(rate, v);
+    }
+    // (ramping down, up to twice the ramp is allowed, so that frame time jitter cannot leave the rate above the
+    // curve that ends on the goal)
+    const double step = acc * dt * (s.phase == 2 ? 2.0 : 1.0);
+    s.rate = want > s.rate ? std::min(want, s.rate + step) : std::max(want, s.rate - step);
+    s.pan += s.rate * dt;
+}
+
+}  // namespace lsodiag

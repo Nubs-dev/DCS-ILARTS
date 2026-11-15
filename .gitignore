@@ -1,0 +1,20 @@
+# Build output (only the top-level build folder: third_party/webview2/build is the SDK)
+/build/
+out/
+dist/
+*.pdb
+*.ilk
+
+# Python
+__pycache__/
+*.pyc
+
+# ED's unmodified shader (the installer backs up the original from the DCS install;
+# regenerate the hooked copy with tools/make_bwtv.py)
+deploy/shaders/original/
+
+# Local viewer settings / editor state
+lso_viewer.ini
+ILARTS.ini
+.vscode/
+.vs/

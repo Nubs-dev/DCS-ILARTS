@@ -1,0 +1,2 @@
+6b68a5b4fdeca6130b851e5f9366467a844860e5
+Spout2 SDK (https://github.com/leadedge/Spout2), SpoutDX sender and its SpoutGL support files, unchanged.

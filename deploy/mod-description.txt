@@ -1,0 +1,35 @@
+DCS ILARTS - the carrier's closed-circuit TV station for DCS World Supercarrier.
+
+The PLAT camera, both LSO station screens and the deck cameras in their own window, from anywhere in the
+mission: a cockpit, another ship or the F10 map.
+
+- Deck cameras: an island camera follows each landing aircraft. Nine more deck positions have pan, tilt and zoom.
+- Automatic pass recording: one MP4 per approach, named after the pilot, the case and the LSO grade.
+- Instant replay with slow motion and frame stepping.
+- Black box: a crash, ejection or lost aircraft near the carrier saves itself.
+- Up to four RTMP streams, or a 1080p composite of up to four cameras.
+- Spout senders for OBS, and Windows 11 webcams for Discord, Teams and Zoom.
+- REPAIR after a DCS update: restores the hook and DCS's permissions.
+
+Needs DCS World 2.9.31.29434 with Supercarrier, and Windows 10 or 11 (64-bit).
+
+!!! AFTER YOU ENABLE THE MOD - DO NOT SKIP:
+1. Start Mods\tech\ILARTS\bin\ILARTS.exe once.
+2. It says "DCS ILARTS is not set up yet": click Yes (adds the hook's two permissions to Config\autoexec.cfg).
+   Without this, ILARTS does not work in single player or when you host.
+3. Load a mission with a carrier. ILARTS does not open when DCS starts: it opens about 10 seconds after the mission has loaded.
+
+BEFORE YOU DISABLE IT: in ILARTS, SETTINGS > Installation > DCS permissions > REMOVE.
+
+Full reference: Mods\tech\ILARTS\README.txt.
+NOT TESTED WITH OTHER MODS: ILARTS has not been tested for compatibility with any other mod (aircraft,
+terrain, shader or sound mods, ReShade, VR toolkits, overlays). If something misbehaves, disable your other
+mods to find the conflict, then report it with the log.
+
+Downloads, source and problem reports: https://github.com/Nubs-dev/DCS-ILARTS
+Videos: https://www.youtube.com/channel/UCsvqdzJiNPpHHsO97z9y0KA
+Free. Want to say thanks? Consider a donation to the Pilot Mental Health Campaign: https://www.pmhc.org/
+
+Independent community mod. Eagle Dynamics does not make, support or endorse it.
+AI disclosure: built with the help of AI tools (Claude, by Anthropic); designed, directed and tested in DCS by
+the author.
