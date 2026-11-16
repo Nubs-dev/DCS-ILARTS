@@ -759,7 +759,10 @@ struct ConsoleHost {
     std::wstring prev[4];
     bool prevInit = false;
     std::wstring lastDeck;  // the deck position last shown (the DECK key brings it back)
+    bool progOff = false;   // monitor A switched off (its lit source key pressed again): NO SOURCE until a key is pressed
 } g_con;
+// The source monitor A (the program) shows: app.selected, or -1 while the console has it switched off.
+int ProgramSource() { return g_con.on && g_con.progOff ? -1 : app.selected; }
 int ConsoleSecond();  // the source monitor B shows (-1: none / not on the wall); console.inc
 void ParseKnownCams(const std::wstring& t);  // the cameras the last DCS session offered
 bool g_neutral = false;  // drawing a console preview: no adjustments, levels or CCTV look
@@ -1720,7 +1723,7 @@ ViewState ViewFor(int source) {
     return v;
 }
 
-ViewState CurrentView() { return ViewFor(app.selected); }
+ViewState CurrentView() { return ProgramSource() >= 0 ? ViewFor(app.selected) : ViewState{}; }
 
 // Width / height a picture is shown at (an extra camera's render target may be square).
 float ViewAspect(const ViewState& v) {
@@ -1910,7 +1913,7 @@ void Update() {
         if (s2 >= 0) analyse(ViewFor(s2));
     }
     for (const auto& ch : g_rec.extra)
-        if (ch->source != app.selected) analyse(ViewFor(ch->source));
+        if (ch->source != ProgramSource()) analyse(ViewFor(ch->source));
     if (g_con.on)  // the console's camera previews go through the camera curve: DCS's exposure of each
         for (int i = 0; i < CameraCount(); ++i) {
             ViewState x = ViewFor(kFeeds + i);
@@ -2479,7 +2482,7 @@ void ChannelCapture(Channel& ch, const ViewState& v) {
 int ConsoleSourceOf(const std::wstring& id);  // console.inc
 // A stream's source name: "a" / "b" = what monitor A / B shows, else that source; -1 = none.
 int StreamSource(const std::wstring& k) {
-    if (k == L"a") return app.selected;
+    if (k == L"a") return ProgramSource();
     if (k == L"b") return g_con.secondKey.empty() ? -1 : ConsoleSourceOf(g_con.secondKey);
     return ConsoleSourceOf(k);
 }
@@ -3608,7 +3611,16 @@ void Changed(bool layout = false, bool anchorRight = true) {
 void SetCamera(int i, bool on, bool drop = true);
 
 void SelectFeed(int feed) {
-    if (feed == app.selected || feed < 0 || feed >= FeedCount()) return;
+    if (feed < 0 || feed >= FeedCount()) return;
+    if (g_con.progOff) {  // monitor A was switched off: any source key turns it on again
+        g_con.progOff = false;
+        if (feed == app.selected) {
+            ResetAuto();
+            Changed(true);
+            return;
+        }
+    }
+    if (feed == app.selected) return;
     if (feed >= kFeeds && !((g_cam.want >> (feed - kFeeds)) & 1)) SetCamera(feed - kFeeds, true);  // showing a camera switches it on
     UseGroup(GroupOf(feed));  // the controls now act on this picture's own levels
     app.selected = feed;
@@ -4203,14 +4215,17 @@ void SetCamera(int i, bool on, bool drop) {
     if (!IsPosition(i)) SetCameraIni(i, false);  // remembered again once it has delivered pictures for 10 s
     SendCameraMask();
     if (!on && drop) {  // a camera switched off leaves every monitor (so nothing asks for it again)
-        if (app.selected == kFeeds + i) SelectFeed(0);
+        if (app.selected == kFeeds + i) {
+            if (g_con.progOff) app.selected = 0, UseGroup(0);  // monitor A stays off
+            else SelectFeed(0);
+        }
         ConsoleDropSource(kFeeds + i);
     }
     if (was != on && !IsPosition(i)) RecStatus(CameraName(i) + (on ? L" camera: asked DCS to render it" : L" camera off"));
 }
 
 bool ConsoleShows(int s);  // console.inc: monitor B or a preview on screen shows source s
-bool SourceShown(int s) { return app.selected == s || ConsoleShows(s); }
+bool SourceShown(int s) { return (s >= 0 && ProgramSource() == s) || ConsoleShows(s); }
 // A camera renders exactly while a monitor on screen shows it - or, the island camera, while its REC switch is on
 // (the deck positions' REC switch only records the ones shown). A deck position that is not needed gives its
 // render slot back.
@@ -4597,6 +4612,7 @@ void TestLog(const std::wstring& line) {
 }
 
 void HandleKey(WPARAM w);
+void ConsoleProgramOff();  // console.inc: monitor A shows no source
 
 void TestSummary() {
     TestLog(L"summary: saved=" + std::to_wstring(g_savedCount) + L" discarded=" + std::to_wstring(g_discardCount) + L" blackbox_saved=" +
@@ -4858,7 +4874,11 @@ void HandleKey(WPARAM w) {
         return;
     }
     if (w == 'L' && !g_con.on && !mods) return ToggleMaster();
-    if (!mods && w >= '1' && w < static_cast<WPARAM>('1' + std::min(9, FeedCount()))) SelectFeed(static_cast<int>(w - '1'));
+    if (!mods && w >= '1' && w < static_cast<WPARAM>('1' + std::min(9, FeedCount()))) {
+        const int s = static_cast<int>(w - '1');
+        if (g_con.on && s == ProgramSource()) return ConsoleProgramOff();  // the lit key again: monitor A off
+        SelectFeed(s);
+    }
 }
 
 // ---------------------------------------------------------------- mouse on the sidebar

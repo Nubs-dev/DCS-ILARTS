@@ -814,7 +814,7 @@ select.fld{appearance:auto}
       if (mon) return this._cmd('source', { id: mon.dataset.pick, mon: 0 });
       const u = this._unitOf(e.target), m = this._mons()[u] || {};
       const src = e.target.closest('[data-src]');
-      if (src) return this._cmd('source', { id: src.dataset.src, mon: u });
+      if (src) return this._cmd('source', { id: src.dataset.src, mon: u, toggle: true });  // the lit key again: monitor off
       const rec = e.target.closest('[data-rec]');
       if (rec) return this._cmd('recArm', { id: rec.dataset.rec });
       const stn = e.target.closest('[data-stn]');

@@ -731,6 +731,13 @@ void ConsoleResize() {
             app.ctx->OMSetRenderTargets(0, nullptr, nullptr);
             app.swap->ResizeBuffers(0, static_cast<UINT>(rc.right), static_cast<UINT>(rc.bottom), DXGI_FORMAT_UNKNOWN, 0);
             CreateBackbufferView();
+            // Black until the next frame: while the window is dragged to a new size Windows runs its own message
+            // loop, nothing renders, and the monitors would show the last pictures stretched.
+            if (app.rtv) {
+                const float black[4] = {0, 0, 0, 1};
+                app.ctx->ClearRenderTargetView(app.rtv, black);
+                app.swap->Present(0, 0);
+            }
         }
     }
     if (g_con.dcomp) g_con.dcomp->Commit();
@@ -928,6 +935,16 @@ int ConsoleDeckFor(int cur) {
     return n > 0 ? PositionSource(0) : -1;
 }
 
+// Monitor A shows no source (its lit source key pressed again); any source key turns it on again (SelectFeed).
+void ConsoleProgramOff() {
+    if (g_con.progOff) return;
+    if (g_rec.replay) ReplayStop();
+    g_con.progOff = true;
+    ResetAuto();
+    CameraReconcile();  // a deck position only it showed gives its render slot back
+    Changed();
+}
+
 // Monitor B shows source s (a camera is switched on to be shown; -1 = nothing).
 void ConsoleSetSecond(int s) {
     if (s >= FeedCount()) return;
@@ -957,7 +974,7 @@ void ConsoleSetWall(int w) {
 int ConsoleMonSource(const std::wstring& j) {
     double m = 0;
     JsonNum(j, L"mon", &m);
-    return m > 0.5 ? ConsoleSecond() : app.selected;
+    return m > 0.5 ? ConsoleSecond() : ProgramSource();
 }
 
 // The levels of settings group g, and saving them after a change (the program's group goes through Changed()).
@@ -1110,7 +1127,7 @@ std::wstring ConsoleState() {
     s.flag(L"nativeLook", true);
     s.flag(L"windowButtons", true);
     s.flag(L"settings", true);
-    s.str(L"status", compatBad ? L"DCS NOT COMPATIBLE" : !HeaderValid() ? L"WAITING FOR DCS" : progName + L" \x00B7 " + (picture ? res : L"NO SIGNAL"));
+    s.str(L"status", compatBad ? L"DCS NOT COMPATIBLE" : !HeaderValid() ? L"WAITING FOR DCS" : ProgramSource() < 0 ? L"NO SOURCE" : progName + L" \x00B7 " + (picture ? res : L"NO SIGNAL"));
     if (GetTickCount64() < g_flashUntil) s.str(L"flash", Upper(g_flash));
     // the knobs' ranges are the application's (contrast and gamma sweep logarithmically, as the sliders did)
     s.open(L"knobs");
@@ -1128,7 +1145,7 @@ std::wstring ConsoleState() {
     // the monitor wall: A (the program) and B
     s.str(L"layout", g_con.wall == 0 ? L"1" : g_con.wall == 2 ? L"q" : L"2");
     s.open(L"monitors", L'[');
-    ConsoleMonitor(s, app.selected, true);
+    ConsoleMonitor(s, ProgramSource(), true);
     ConsoleMonitor(s, ConsoleSourceOf(g_con.secondKey), false);
     s.close(L']');
     // sources (buttons and previews)
@@ -1141,7 +1158,7 @@ std::wstring ConsoleState() {
         if (IsDeckSource(i)) s.str(L"group", L"deck");  // one DECK key; the view selector picks the position
         s.str(L"plate", ConsolePlate(i));
         s.flag(L"signal", ViewFor(i).main != nullptr);
-        s.flag(L"selected", i == app.selected);
+        s.flag(L"selected", i == ProgramSource());
         s.flag(L"rec", RecArmed(i));  // the VTR records this source (its REC switch)
         s.num(L"fps", std::round(ConsoleSourceFps(i)));
         s.close();
@@ -1380,13 +1397,17 @@ void ConsoleCommand(const std::wstring& j) {
         double rep = 0;
         JsonNum(j, L"repeat", &rep);
         if (JsonNum(j, L"vk", &n) && !(static_cast<int>(n) == 'N' && rep > 0.5)) HandleKey(static_cast<WPARAM>(n));
-    } else if (cmd == L"source") {  // {id, mon}: id "deck" = the DECK key
-        double mon = 0;
+    } else if (cmd == L"source") {  // {id, mon, toggle}: id "deck" = the DECK key; toggle: the key shown again = monitor off
+        double mon = 0, toggle = 0;
         JsonNum(j, L"mon", &mon);
-        const int cur = mon > 0.5 ? ConsoleSourceOf(g_con.secondKey) : app.selected;
+        JsonNum(j, L"toggle", &toggle);
+        const int cur = mon > 0.5 ? ConsoleSourceOf(g_con.secondKey) : ProgramSource();
         const std::wstring id = JsonStr(j, L"id");
         const int s = id == L"deck" ? ConsoleDeckFor(cur) : ConsoleSourceOf(id);
-        if (s >= 0 && mon > 0.5) {
+        if (s >= 0 && s == cur && toggle > 0.5) {  // pressed again: the monitor shows no source
+            if (mon > 0.5) ConsoleSetSecond(-1);
+            else ConsoleProgramOff();
+        } else if (s >= 0 && mon > 0.5) {
             ConsoleSetSecond(s);
         } else if (s >= 0) {
             if (g_rec.replay) ReplayStop();  // the program monitor shows the source picked
@@ -1397,7 +1418,7 @@ void ConsoleCommand(const std::wstring& j) {
     } else if (cmd == L"view") {  // a monitor's deck position: {mon, dir: -1 / 1} (skips those on other monitors) or {mon, index}
         double mon = 0, idx = 0, dir = 0;
         JsonNum(j, L"mon", &mon);
-        const int cur = mon > 0.5 ? ConsoleSourceOf(g_con.secondKey) : app.selected;
+        const int cur = mon > 0.5 ? ConsoleSourceOf(g_con.secondKey) : ProgramSource();
         if (!IsDeckSource(cur)) return;
         const int count = CameraViewCount(cur - kFeeds), at = g_lcams[cur - kFeeds].pos;
         int k = at;
@@ -1434,8 +1455,8 @@ void ConsoleCommand(const std::wstring& j) {
         if (!JsonNum(j, L"slot", &n)) return;
         const int k = std::clamp(static_cast<int>(n), 0, 3), s = ConsoleSourceOf(g_con.prev[k]);
         if (s < 0) return;
-        const int a = app.selected;
-        g_con.prev[k] = SourceKey(a);
+        const int a = ProgramSource();
+        g_con.prev[k] = a >= 0 ? SourceKey(a) : L"";
         ConsoleSavePreviews();
         if (g_rec.replay) ReplayStop();
         SelectFeed(s);
@@ -1445,10 +1466,14 @@ void ConsoleCommand(const std::wstring& j) {
         const std::wstring m = JsonStr(j, L"mode");
         ConsoleSetWall(m == L"1" ? 0 : m == L"q" ? 2 : 1);
     } else if (cmd == L"swap") {  // monitors A and B change pictures
-        const int a = app.selected, b = ConsoleSecond();
-        if (b >= 0 && b != a) {
-            if (g_rec.replay) ReplayStop();
-            SelectFeed(b);
+        const int a = ProgramSource(), b = ConsoleSecond();
+        if (g_con.wall == 1 && b != a) {  // either may show no source
+            if (b >= 0) {
+                if (g_rec.replay) ReplayStop();
+                SelectFeed(b);
+            } else {
+                ConsoleProgramOff();
+            }
             ConsoleSetSecond(a);
         }
     } else if (cmd == L"ship") {
