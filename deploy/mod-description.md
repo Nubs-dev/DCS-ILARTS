@@ -31,7 +31,7 @@ Read `Mods\tech\ILARTS\README.txt` for the full reference.
 
 **Not tested with other mods:** ILARTS has not been tested for compatibility with any other mod (aircraft, terrain, shader or sound mods, ReShade, VR toolkits, overlays). If something misbehaves, disable your other mods to find the conflict, then report it with the log.
 
-Downloads, source and problem reports: [GitHub](https://github.com/Nubs-dev/DCS-ILARTS). Videos: [YouTube](https://www.youtube.com/channel/UCsvqdzJiNPpHHsO97z9y0KA). Free. Want to say thanks? Consider a donation to the [Pilot Mental Health Campaign](https://www.pmhc.org/).
+Downloads, source and problem reports: [GitHub](https://github.com/Nubs-dev/DCS-ILARTS). You can also report bugs in the #ilarts-issues forum on [Discord](https://discord.gg/qsjedwKHNr). Videos: [YouTube](https://www.youtube.com/@Nubs-dev). Free. Want to say thanks? Consider a donation to the [Pilot Mental Health Campaign](https://www.pmhc.org/).
 
 *Independent community mod. Eagle Dynamics does not make, support or endorse it.*
 *AI disclosure: built with the help of AI tools (Claude, by Anthropic); designed, directed and tested in DCS by the author.*

@@ -161,7 +161,7 @@ class Publisher {
         cfg_ = c;
         quit_ = false;
         state_ = Connecting;
-        setText("connecting");
+        setText("connecting", "CONNECTING");
         thread_ = std::thread([this] { run(); });
     }
 
@@ -200,6 +200,10 @@ class Publisher {
         std::lock_guard<std::mutex> l(tm_);
         return text_;
     }
+    std::string shortText() const {  // the state in a word or two (CONNECTING, LIVE, NO SERVER ...)
+        std::lock_guard<std::mutex> l(tm_);
+        return short_;
+    }
     double liveSeconds() const { return state_ == Live ? video::Now() - liveSince_ : 0; }
     long long bytesSent() const { return sent_; }
     long dropped() const { return dropped_; }
@@ -208,8 +212,8 @@ class Publisher {
     // ---- url
     bool parseUrl() {
         std::string u = cfg_.url;
-        if (u.rfind("rtmps://", 0) == 0) return fail("rtmps is not supported (use rtmp://)");
-        if (u.rfind("rtmp://", 0) != 0) return fail("the address must start with rtmp://");
+        if (u.rfind("rtmps://", 0) == 0) return fail("rtmps is not supported (use rtmp://)", "NO RTMPS");
+        if (u.rfind("rtmp://", 0) != 0) return fail("the address must start with rtmp://", "BAD ADDRESS");
         u = u.substr(7);
         const size_t slash = u.find('/');
         std::string hostport = slash == std::string::npos ? u : u.substr(0, slash);
@@ -221,13 +225,13 @@ class Publisher {
         playpath_ = cfg_.key;
         if (playpath_.empty()) {
             const size_t last = path.rfind('/');
-            if (last == std::string::npos) return fail("no stream key (give one, or end the address with it)");
+            if (last == std::string::npos) return fail("no stream key (give one, or end the address with it)", "NO KEY");
             playpath_ = path.substr(last + 1);
             path = path.substr(0, last);
         }
         app_ = path;
         tcUrl_ = "rtmp://" + hostport + "/" + app_;
-        if (host_.empty() || app_.empty() || playpath_.empty()) return fail("the address needs a host and an application (rtmp://host/app)");
+        if (host_.empty() || app_.empty() || playpath_.empty()) return fail("the address needs a host and an application (rtmp://host/app)", "BAD ADDRESS");
         return true;
     }
 
@@ -240,7 +244,7 @@ class Publisher {
         const SOCKET s = sock_;
         while (n > 0) {
             const int r = ::send(s, reinterpret_cast<const char*>(p), static_cast<int>(std::min<size_t>(n, 1 << 16)), 0);
-            if (r <= 0) return fail("connection lost while sending");
+            if (r <= 0) return fail("connection lost while sending", "DROPPED");
             p += r;
             n -= static_cast<size_t>(r);
             sent_ += r;
@@ -255,11 +259,11 @@ class Publisher {
         FD_SET(s, &rd);
         timeval tv{waitMs / 1000, (waitMs % 1000) * 1000};
         const int sel = select(0, &rd, nullptr, nullptr, &tv);
-        if (sel < 0) return fail("connection lost");
+        if (sel < 0) return fail("connection lost", "DROPPED");
         if (sel == 0) return true;
         uint8_t buf[4096];
         const int r = recv(s, reinterpret_cast<char*>(buf), sizeof(buf), 0);
-        if (r <= 0) return fail("the server closed the connection");
+        if (r <= 0) return fail("the server closed the connection", "CLOSED");
         in_.insert(in_.end(), buf, buf + r);
         received_ += static_cast<uint32_t>(r);
         return true;
@@ -267,7 +271,7 @@ class Publisher {
     bool readExact(uint8_t* dst, size_t n, int timeoutMs) {
         const ULONGLONG deadline = GetTickCount64() + timeoutMs;
         while (in_.size() < n) {
-            if (GetTickCount64() > deadline) return fail("the server did not answer");
+            if (GetTickCount64() > deadline) return fail("the server did not answer", "NO ANSWER");
             if (!readSome(200)) return false;
             if (stopping()) return false;
         }
@@ -280,7 +284,7 @@ class Publisher {
         addrinfo hints{};
         hints.ai_socktype = SOCK_STREAM;
         addrinfo* res = nullptr;
-        if (getaddrinfo(host_.c_str(), port_.c_str(), &hints, &res) != 0 || !res) return fail("host not found: " + host_);
+        if (getaddrinfo(host_.c_str(), port_.c_str(), &hints, &res) != 0 || !res) return fail("host not found: " + host_, "NO HOST");
         SOCKET s = INVALID_SOCKET;
         for (addrinfo* a = res; a && s == INVALID_SOCKET; a = a->ai_next) {
             s = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
@@ -288,11 +292,13 @@ class Publisher {
             u_long nb = 1;
             ioctlsocket(s, FIONBIO, &nb);
             ::connect(s, a->ai_addr, static_cast<int>(a->ai_addrlen));
-            fd_set wr;
+            fd_set wr, ex;  // Windows reports a refused connection in the exception set, not the write set
             FD_ZERO(&wr);
             FD_SET(s, &wr);
+            FD_ZERO(&ex);
+            FD_SET(s, &ex);
             timeval tv{5, 0};
-            if (select(0, nullptr, &wr, nullptr, &tv) <= 0) {
+            if (select(0, nullptr, &wr, &ex, &tv) <= 0 || FD_ISSET(s, &ex)) {
                 closesocket(s);
                 s = INVALID_SOCKET;
                 continue;
@@ -301,7 +307,7 @@ class Publisher {
             ioctlsocket(s, FIONBIO, &nb);
         }
         freeaddrinfo(res);
-        if (s == INVALID_SOCKET) return fail("cannot connect to " + host_ + ":" + port_);
+        if (s == INVALID_SOCKET) return fail("cannot connect to " + host_ + ":" + port_, "NO SERVER");
         const DWORD to = 5000;
         setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&to), sizeof(to));
         const int nodelay = 1;
@@ -437,12 +443,12 @@ class Publisher {
                 streamId_ = static_cast<uint32_t>(sid);
                 haveStream_ = true;
             }
-            if (name == "_error") return fail(Contains(m, "Rejected") ? "the server rejected the connection (address or key)" : "the server reported an error");
+            if (name == "_error") return Contains(m, "Rejected") ? fail("the server rejected the connection (address or key)", "REJECTED") : fail("the server reported an error", "SERVER ERROR");
             if (name == "onStatus") {
                 if (Contains(m, "NetStream.Publish.Start")) publishing_ = true;
-                else if (Contains(m, "BadName")) return fail("the server refused the stream key (already in use?)");
+                else if (Contains(m, "BadName")) return fail("the server refused the stream key (already in use?)", "KEY IN USE");
                 else if (Contains(m, "Denied") || Contains(m, "Rejected") || Contains(m, "Unauthorized") || Contains(m, "Failed"))
-                    return fail("the server refused the stream (key?)");
+                    return fail("the server refused the stream (key?)", "REFUSED");
             }
         }
         return true;
@@ -464,7 +470,7 @@ class Publisher {
         const ULONGLONG deadline = GetTickCount64() + timeoutMs;
         while (!done()) {
             if (stopping()) return false;
-            if (GetTickCount64() > deadline) return fail(std::string("no answer from the server (") + what + ")");
+            if (GetTickCount64() > deadline) return fail(std::string("no answer from the server (") + what + ")", "NO ANSWER");
             if (!pump(100)) return false;
         }
         return true;
@@ -478,7 +484,7 @@ class Publisher {
         if (!sendAll(c.data(), c.size())) return false;
         Bytes s(1 + 1536 + 1536);
         if (!readExact(s.data(), s.size(), 8000)) return false;
-        if (s[0] != 3) return fail("not an RTMP server");
+        if (s[0] != 3) return fail("not an RTMP server", "NOT RTMP");
         return sendAll(s.data() + 1, 1536);  // C2 = S1
     }
 
@@ -592,12 +598,12 @@ class Publisher {
         if (cfg_.audio) silence_ = SilentAacFrame();
         while (!stopping()) {
             state_ = Connecting;
-            error_.clear();
+            error_.clear(), errorTag_.clear();
             bool ok = parseUrl() && open();
             if (ok) {
                 state_ = Live;
                 liveSince_ = video::Now();
-                setText("live");
+                setText("live", "LIVE");
                 needKey_ = true;
                 sentConfig_ = false;
                 {
@@ -621,7 +627,7 @@ class Publisher {
             closeSocket();
             if (stopping()) break;
             state_ = Retrying;
-            setText(error_.empty() ? "connection lost" : error_);
+            setText(error_.empty() ? "connection lost" : error_, errorTag_.empty() ? "DROPPED" : errorTag_);
             std::unique_lock<std::mutex> l(m_);
             cv_.wait_for(l, std::chrono::seconds(5), [&] { return quit_; });
         }
@@ -633,13 +639,15 @@ class Publisher {
         std::lock_guard<std::mutex> l(m_);
         return quit_;
     }
-    bool fail(const std::string& why) {
-        if (error_.empty()) error_ = why;
+    // why: the sentence (the console's tooltip, the test log); tag: a word or two for the console's LCD
+    bool fail(const std::string& why, const char* tag) {
+        if (error_.empty()) error_ = why, errorTag_ = tag;
         return false;
     }
-    void setText(const std::string& t) {
+    void setText(const std::string& t, const std::string& tag) {
         std::lock_guard<std::mutex> l(tm_);
         text_ = t;
+        short_ = tag;
     }
 
     Config cfg_;
@@ -654,7 +662,7 @@ class Publisher {
     bool quit_ = false;
     std::deque<live::UnitPtr> q_;
     std::atomic<bool> needKey_{true};
-    std::string text_, error_;
+    std::string text_, short_, error_, errorTag_;
     // session (publisher thread only)
     std::string host_, port_, app_, playpath_, tcUrl_;
     Bytes in_;

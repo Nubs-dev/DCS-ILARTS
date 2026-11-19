@@ -10,10 +10,13 @@ namespace lsoshare {
 
 constexpr wchar_t kMappingName[] = L"Local\\ILARTS_Share";
 constexpr uint32_t kMagic = 0x534F534C;  // "LSOS"
-constexpr uint32_t kVersion = 7;  // 2: compat and pass blocks, 3: several passes, 4: cameras, grades, mishaps, 5: camera PTZ, 6: camera views,
-                                  // 7: 6 cameras / 16 targets (the deck camera's render slots)
+constexpr uint32_t kVersion = 9;  // 2: compat and pass blocks, 3: several passes, 4: cameras, grades, mishaps, 5: camera PTZ, 6: camera views,
+                                  // 7: 6 cameras / 16 targets (the deck camera's render slots),
+                                  // 8: whose passes (auto recording filter), mission name
+                                  // 9: each camera's pose (the viewer's camera tuning panel)
 constexpr int kMaxTargets = 16;  // 4 of the PLAT and the station, then 2 per camera (LDR, HDR)
 constexpr int kMaxCameras = 6;   // ISLAND and the deck camera's render slots
+constexpr char kViewHangar = 'H';  // CameraViews::names[k][23]: a hangar deck position (it never tracks)
 constexpr int kMaxViews = 16;  // v6: views (positions) one camera can be put at
 
 // One shared render-target copy.
@@ -193,8 +196,39 @@ struct Header {
         int32_t request;           // viewer
         int32_t current;           // hook
         uint32_t count;            // hook
-        char names[kMaxViews][24]; // hook
+        char names[kMaxViews][24]; // hook; a name has up to 22 characters, and its last byte (names[k][23]) holds
+                                   // kViewHangar for a hangar deck position (0 otherwise; older readers stop at the NUL)
     } views[kMaxCameras];
+
+    // Version 8 ----------------------------------------------------------------------------------------
+    // Whose passes they are (the viewer's automatic recording filter: your aircraft, section, flight or all), from the
+    // hook with the passes. ownAircraft: 0 = not reported (a hook older than the DLL: treat every pass as matching),
+    // 1 = you are in an aircraft, or were earlier in this mission (you landed and went to the LSO station, or released
+    // the slot: the flags then follow that last aircraft), 2 = you have had none this mission (spectator, LSO / observer).
+    // passFlags[i] belongs to passes[i]: bit 0 = flown by your aircraft, bit 1 = your section (your 2-ship element:
+    // units 1-2, 3-4 ... of your group), bit 2 = your flight (your group). Your own aircraft sets all three.
+    uint32_t ownAircraft;
+    uint32_t passFlags[4];
+    // The mission's name (hook: DCS.getMissionName(), else the file name without .miz), UTF-8, NUL-terminated,
+    // "" until the hook has published it. Written with sym (same seq); the viewer names each mission's
+    // recordings folder after it.
+    char missionName[64];
+
+    // Version 9 ----------------------------------------------------------------------------------------
+    // Where each camera is: the hook's settings for what it shows (its rest view, without the joystick's pan / tilt /
+    // zoom), as last sent to the DLL ('set'), in the carrier's axes (m from the model origin: x forward, y up, z
+    // starboard). name = the view shown (a deck position), else the camera's own name: the name its entry in the
+    // tuning file (Saved Games\DCS\Config\ILARTS-cameras.lua) has. seq increments after each change; valid = 0
+    // until the hook has sent the camera.
+    struct CameraPose {
+        volatile LONG seq;
+        uint32_t valid;
+        char name[24];
+        float pos[3], look[3];
+        float fovDeg;  // horizontal
+    } camPose[kMaxCameras];
 };
+
+constexpr uint32_t kPassOwn = 1, kPassSection = 2, kPassFlight = 4;  // Header::passFlags bits
 
 }  // namespace lsoshare

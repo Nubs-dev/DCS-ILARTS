@@ -1,0 +1,12 @@
+// ILARTS.exe resources. The icons are built from the artwork in assets/ by tools/make_icon.py.
+// 1 (the lowest id) is the file's icon in Explorer, shortcuts and the installer: the light artwork, which stands out
+// on Windows' default dark theme. The window and taskbar icon follow Windows' theme at run time (ApplyAppIcon in
+// lso_viewer.cpp): 1 on a dark taskbar, 2 on a light one.
+1 ICON "../assets/ILARTS-light.ico"
+2 ICON "../assets/ILARTS-dark.ico"
+
+// The version (src/version.rc).
+#define ILARTS_FILE_DESC "DCS ILARTS"
+#define ILARTS_FILE_NAME "ILARTS.exe"
+#define ILARTS_FILE_TYPE VFT_APP
+#include "../src/version.rc"

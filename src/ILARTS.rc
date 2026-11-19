@@ -1,0 +1,5 @@
+// ILARTS.dll resources: the version (src/version.rc).
+#define ILARTS_FILE_DESC "DCS ILARTS module"
+#define ILARTS_FILE_NAME "ILARTS.dll"
+#define ILARTS_FILE_TYPE VFT_DLL
+#include "version.rc"

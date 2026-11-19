@@ -20,7 +20,7 @@ namespace lsodiag {
 
 using RenderFrameFn = void (*)(int event);  // called for every renderer event (0..8)
 
-// Installs (once) a callback for all 9 renderer events; `fn(event)` is invoked for each.
+// Installs (once) a callback for all 9 renderer events; `fn(event)` is invoked for each (null: keep the one set).
 // Returns "" on success, otherwise the reason.
 std::string EnsureRenderCallback(RenderFrameFn fn);
 

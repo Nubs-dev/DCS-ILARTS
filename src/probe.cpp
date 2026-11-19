@@ -19,7 +19,10 @@
 // Nothing here runs at load time. The Lua functions run on whatever thread DCS calls the
 // hook on (logged), which for the GUI hooks environment is the main simulation thread.
 
+#include "bench.h"
+#include "bench_protocol.h"
 #include "capture.h"
+#include "ilarts_version.h"
 #include "common.h"
 #include "compat.h"
 #include "engine.h"
@@ -32,11 +35,13 @@
 #include "memscan.h"
 #include "hullscan.h"
 #include "hull_refresh.h"
+#include "own_canopy.h"
 #include "plat_cam.h"
 #include "extra_cams.h"
 #include "mfd.h"
 #include "render_callback.h"
 #include "share.h"
+#include "share_protocol.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -347,9 +352,20 @@ int L_share_control(lua_State* L) {
 }
 
 // ILARTS.share_cameras(text)   "name|ldr|hdr|available|enabled|aspect" lines (lsoshare::Header::cameras)
+// The pose each camera was last 'set' to (extra_cam), published as Header::camPose (v9) at once and again with
+// every share_cameras call (once a second), so a new mapping gets it too.
+struct CamPose {
+    bool set = false;
+    char name[24] = {};
+    double pos[3] = {}, look[3] = {}, fov = 0;
+};
+CamPose g_camPose[lsoshare::kMaxCameras];
+
 int L_share_cameras(lua_State* L) {
     const char* t = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
     if (t) ShareSetCameras(t);
+    for (int i = 0; i < lsoshare::kMaxCameras; ++i)
+        if (g_camPose[i].set) ShareSetCameraPose(i, g_camPose[i].name, g_camPose[i].pos, g_camPose[i].look, g_camPose[i].fov);
     return 0;
 }
 
@@ -448,8 +464,20 @@ int L_extra_cam(lua_State* L) {
         if (lua.gettop(L) < 12) return result("extra_cam('set', index, px, py, pz, lx, ly, lz, fov, aspect, source, type)");
         const double pos[3] = {lua.tonumber(L, 3), lua.tonumber(L, 4), lua.tonumber(L, 5)};
         const double look[3] = {lua.tonumber(L, 6), lua.tonumber(L, 7), lua.tonumber(L, 8)};
-        ExtraCamsConfigure(static_cast<int>(lua.tonumber(L, 2)), pos, look, lua.tonumber(L, 9), lua.tonumber(L, 10),
-                           static_cast<int>(lua.tonumber(L, 11)), static_cast<int>(lua.tonumber(L, 12)));
+        const int index = static_cast<int>(lua.tonumber(L, 2));
+        ExtraCamsConfigure(index, pos, look, lua.tonumber(L, 9), lua.tonumber(L, 10), static_cast<int>(lua.tonumber(L, 11)),
+                           static_cast<int>(lua.tonumber(L, 12)));
+        // 13: what it shows (the view's or camera's name), for Header::camPose (the viewer's tuning panel)
+        const char* shown = lua.gettop(L) >= 13 ? lua.tolstring(L, 13, nullptr) : nullptr;
+        if (shown && index >= 0 && index < lsoshare::kMaxCameras) {
+            CamPose& p = g_camPose[index];
+            p.set = true;
+            strncpy_s(p.name, shown, _TRUNCATE);
+            memcpy(p.pos, pos, sizeof(p.pos));
+            memcpy(p.look, look, sizeof(p.look));
+            p.fov = lua.tonumber(L, 9);
+            ShareSetCameraPose(index, p.name, p.pos, p.look, p.fov);
+        }
         return 0;
     }
     if (act == "enable") return result(ExtraCamsEnable(lua.gettop(L) >= 2 ? static_cast<unsigned>(lua.tonumber(L, 2)) : 0));
@@ -684,6 +712,33 @@ int L_hull_refresh(lua_State* L) {
     lua.pushstring(L, HullRefreshStats().c_str());
     return 1;
 }
+// ILARTS.own_canopy(action)   (your aircraft's canopy in ILARTS's views; see own_canopy.h)
+//   'install' -> true | nil, reason    'on' / 'off'    'stats' -> summary    'remove'
+int L_own_canopy(lua_State* L) {
+    LogScope log;
+    const char* a = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
+    const std::string act = a ? a : "stats";
+    if (act == "install") {
+        std::string why = OwnCanopyInstall();
+        if (why.empty()) {
+            lua.pushboolean(L, 1);
+            return 1;
+        }
+        lua.pushnil(L);
+        lua.pushstring(L, why.c_str());
+        return 2;
+    }
+    if (act == "on" || act == "off") {
+        OwnCanopyEnable(act == "on");
+        return 0;
+    }
+    if (act == "remove") {
+        OwnCanopyRemove();
+        return 0;
+    }
+    lua.pushstring(L, OwnCanopyStats().c_str());
+    return 1;
+}
 // ILARTS.plat_cam(action, ...)   (synthetic PLAT camera; see plat_cam.h)
 //   'enable' -> true | nil, reason    'disable'    'select', x, y, z, type    'ship', "12 numbers"
 //   'stats' -> summary
@@ -906,28 +961,13 @@ int L_launch_viewer(lua_State* L) {
     if (FindWindowW(L"ILARTSViewer", nullptr)) {
         out = "already running";
     } else {
-        HMODULE self = nullptr;
-        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCWSTR>(&L_launch_viewer), &self);
-        std::wstring dir = ModulePath(self);
-        dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
-        std::wstring exe = dir + L"ILARTS.exe";
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, (dir + L"viewer_path.txt").c_str(), L"rb") == 0 && f) {
-            char buf[1024] = {};
-            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-            fclose(f);
-            std::string s(buf, n);
-            if (s.rfind("\xEF\xBB\xBF", 0) == 0) s.erase(0, 3);
-            while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ')) s.pop_back();
-            wchar_t w[1024] = {};
-            if (!s.empty() && MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w, 1024) > 0) exe = w;
-        }
-        // SETTINGS > Window > Start with DCS: [viewer] auto_start in the ILARTS.ini beside ILARTS.exe (default on)
-        const std::wstring ini = exe.substr(0, exe.find_last_of(L"\\/") + 1) + L"ILARTS.ini";
+        const std::wstring exe = ViewerExePath();  // bench.cpp: bin\viewer_path.txt, else beside the DLL
+        // SETTINGS > Window > Start with DCS: [viewer] auto_start in the ILARTS.ini beside ILARTS.exe (default on).
+        // An armed benchmark needs the viewer: it starts anyway.
+        const std::wstring ini = ViewerIniPath();
         if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
             out = "not found: " + Utf8(exe);
-        } else if (GetPrivateProfileIntW(L"viewer", L"auto_start", 1, ini.c_str()) == 0) {
+        } else if (GetPrivateProfileIntW(L"viewer", L"auto_start", 1, ini.c_str()) == 0 && !BenchArmed()) {
             out = "not started: auto start is off ([viewer] auto_start=0)";
         } else {
             STARTUPINFOW si{sizeof(si)};
@@ -948,6 +988,66 @@ int L_launch_viewer(lua_State* L) {
     Log("VIEWER %s", out.c_str());
     lua.pushstring(L, out.c_str());
     return 1;
+}
+
+// ILARTS.bench(action, ...): the benchmark's hook side (bench.h).
+//   'armed' -> true / false            'begin', info -> true | nil, why     'release'     'ended', reason
+//   'tick', paused                     'who', info (the player's aircraft or slot changed)
+//   'poll' -> 'none' | 'release' | 'done', s since the viewer looked (nil: never), stage
+//   'disarm'
+int L_bench(lua_State* L) {
+    LogScope log;
+    const char* a = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
+    const char* arg = lua.gettop(L) >= 2 && lua.type(L, 2) == 4 ? lua.tolstring(L, 2, nullptr) : nullptr;  // 4: LUA_TSTRING
+    const std::string act = a ? a : "";
+    if (act == "armed") {
+        lua.pushboolean(L, BenchArmed());
+        return 1;
+    }
+    if (act == "begin") {
+        const std::string why = BenchBegin(arg);
+        if (why.empty()) {
+            lua.pushboolean(L, 1);
+            return 1;
+        }
+        lua.pushnil(L);
+        lua.pushstring(L, why.c_str());
+        return 2;
+    }
+    if (act == "release" || act == "ended") {
+        BenchSetState(act == "release" ? lsoshare::kBenchReleased : lsoshare::kBenchEnded, arg);
+        return 0;
+    }
+    if (act == "tick") {
+        BenchTick(lua.gettop(L) >= 2 && lua.toboolean(L, 2) != 0);
+        return 0;
+    }
+    if (act == "who") {
+        BenchWho(arg);
+        return 0;
+    }
+    if (act == "disarm") {
+        BenchDisarm();
+        return 0;
+    }
+    if (act == "poll") {
+        long long age = -1;
+        std::string stage;
+        const LONG c = BenchPoll(&age, &stage);
+        lua.pushstring(L, c == lsoshare::kBenchCmdRelease ? "release" : c == lsoshare::kBenchCmdDone ? "done" : "none");
+        if (age < 0) {
+            lua.pushnil(L);
+        } else {
+            char b[32];
+            _snprintf_s(b, _countof(b), _TRUNCATE, "%.1f", age / 1000.0);
+            lua.pushstring(L, b);  // a number string (lua_pushnumber is not imported)
+        }
+        lua.pushstring(L, stage.c_str());
+        return 3;
+    }
+    lua.pushnil(L);
+    lua.pushstring(L, "bench(armed|begin|release|ended|tick|who|poll|disarm)");
+    return 2;
 }
 
 int L_logpath(lua_State* L) {
@@ -976,15 +1076,16 @@ extern "C" __declspec(dllexport) int luaopen_ILARTS(lsodiag::lua_State* L) {
                {"share_start", L_share_start}, {"share_frame", L_share_frame}, {"compat", L_compat}, {"share_announce", L_share_announce}, {"verbose", L_verbose},
                {"share_status", L_share_status}, {"share_stop", L_share_stop}, {"share_carriers", L_share_carriers}, {"share_symbology", L_share_symbology}, {"share_control", L_share_control}, {"share_cue", L_share_cue},
                {"share_cameras", L_share_cameras}, {"share_camera_control", L_share_camera_control},
+               {"bench", L_bench},
                {"share_camera_view", L_share_camera_view}, {"share_camera_views", L_share_camera_views}, {"share_mishap", L_share_mishap},
                {"share_retarget", L_share_retarget}, {"frame_count", L_frame_count}, {"rt_exists", L_rt_exists}, {"extra_cam", L_extra_cam},
                {"mfd_viewports", L_mfd_viewports}, {"mark_lsoframe", L_mark_lsoframe},
-               {"renderer_callbacks", L_renderer_callbacks}, {"lso_camera", L_lso_camera}, {"keep_plat", L_keep_plat}, {"plat_ui", L_plat_ui}, {"view_calls", L_view_calls}, {"clouds", L_clouds}, {"plat_origin", L_plat_origin}, {"map_objects", L_map_objects},{"memscan", L_memscan}, {"hull_scan", L_hull_scan}, {"hull_refresh", L_hull_refresh}, {"plat_cam", L_plat_cam}, {"sc_override", L_sc_override}, {"set_mfd_resolution", L_set_mfd_resolution}, {"log", L_log}, {"logpath", L_logpath}, {"launch_viewer", L_launch_viewer}};
+               {"renderer_callbacks", L_renderer_callbacks}, {"lso_camera", L_lso_camera}, {"keep_plat", L_keep_plat}, {"plat_ui", L_plat_ui}, {"view_calls", L_view_calls}, {"clouds", L_clouds}, {"plat_origin", L_plat_origin}, {"map_objects", L_map_objects},{"memscan", L_memscan}, {"hull_scan", L_hull_scan}, {"hull_refresh", L_hull_refresh}, {"own_canopy", L_own_canopy},{"plat_cam", L_plat_cam}, {"sc_override", L_sc_override}, {"set_mfd_resolution", L_set_mfd_resolution}, {"log", L_log}, {"logpath", L_logpath}, {"launch_viewer", L_launch_viewer}};
     for (const auto& f : fns) {
         lua.pushcclosure(L, f.fn, 0);
         lua.setfield(L, -2, f.name);
     }
-    lua.pushstring(L, "ILARTS " __DATE__ " " __TIME__ " (verified against DCS 2.9.31.29434)");
+    lua.pushstring(L, "ILARTS " ILARTS_VERSION " (built " __DATE__ " " __TIME__ ", verified against DCS 2.9.31.29434)");
     lua.setfield(L, -2, "version");
     return 1;
 }

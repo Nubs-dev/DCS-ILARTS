@@ -59,6 +59,7 @@ std::wstring ParentDir(const std::wstring& p, int up = 1) {
 // DCS's Saved Games folder: the one this program is installed in (Mods\tech\ILARTS\bin), else the one that has the
 // mod, else the one DCS uses (DCS, then DCS.openbeta).
 std::wstring SavedGamesDcs() {
+    if (!g_testSavedGames.empty()) return g_testSavedGames;  // --test-saved-games (tuning.inc)
     const std::wstring exeDir = ExeDir();
     if (LowerW(exeDir).size() > 21 && LowerW(exeDir).rfind(L"\\mods\\tech\\ilarts\\bin") == LowerW(exeDir).size() - 21) return ParentDir(exeDir, 4);
     wchar_t up[MAX_PATH];
@@ -148,7 +149,8 @@ bool DcsRunning() {
 // autoexec.cfg.ILARTS-backup; the change is one marked block, appended. Uninstalling (the installer runs
 // "--remove-permissions"; OMM / OvGME users click SETTINGS > Installation > REMOVE) takes out exactly that block, so
 // whatever else was edited since is kept. The backup goes once the file is back to it; a file ILARTS created goes
-// once only the block was in it.
+// once only the block was in it. The REMOVE key also takes out the two unmarked lines ILARTS 1.0 asked for by hand
+// (backed up first); lines merged with other mods' entries are left alone (the key shows ALLOWED).
 const wchar_t kAutoexecBackup[] = L".ILARTS-backup";
 std::wstring AutoexecPath() { return SavedGamesDcs() + L"\\Config\\autoexec.cfg"; }
 
@@ -164,7 +166,35 @@ std::pair<size_t, size_t> AutoexecBlock(const std::string& text) {
     if (b >= 1 && text[b - 1] == '\r') --b;
     return {b, e};
 }
-bool AutoexecHasBlock() { return AutoexecBlock(ReadFileBytes(AutoexecPath())).first != std::string::npos; }
+// ILARTS 1.0 asked for these two lines to be added by hand; they carry no marker. [begin, end) of each whole line
+// (with its line break), only when both are there, else empty.
+std::vector<std::pair<size_t, size_t>> AutoexecLegacyLines(const std::string& text) {
+    static const char* const kLines[] = {"net.allow_unsafe_api={\"userhooks\"}", "net.allow_dostring_in={\"mission\",\"server\"}"};
+    std::vector<std::pair<size_t, size_t>> found;
+    for (const char* want : kLines) {
+        bool hit = false;
+        for (size_t b = 0; b < text.size() && !hit;) {
+            size_t e = text.find('\n', b);
+            e = e == std::string::npos ? text.size() : e + 1;
+            std::string bare;
+            for (size_t i = b; i < e; ++i)
+                if (!strchr(" \t\r\n", text[i])) bare += text[i];
+            if (bare == want) {
+                found.push_back({b, e});
+                hit = true;
+            }
+            b = e;
+        }
+        if (!hit) return {};
+    }
+    return found;
+}
+// What SETTINGS > Installation > REMOVE can take out: the block, or the two lines 1.0 asked for.
+bool AutoexecHasOurs() {
+    const std::string text = ReadFileBytes(AutoexecPath());
+    return AutoexecBlock(text).first != std::string::npos || !AutoexecLegacyLines(text).empty();
+}
+bool AutoexecAllowsNow() { return AutoexecAllows(ReadFileBytes(AutoexecPath())); }
 
 void AddPermissions(RepairResult& r) {
     const std::wstring cfg = AutoexecPath(), cfgDir = cfg.substr(0, cfg.find_last_of(L'\\'));
@@ -180,16 +210,27 @@ void AddPermissions(RepairResult& r) {
     else r.problems.push_back(L"Could not write " + cfg);
 }
 
-RepairResult RemovePermissions() {
+// legacy: also the two hand-added lines of 1.0 (the REMOVE key; the uninstaller takes out only the block).
+RepairResult RemovePermissions(bool legacy = false) {
     RepairResult r;
     const std::wstring cfg = AutoexecPath(), backup = cfg + kAutoexecBackup;
     std::string text = ReadFileBytes(cfg);
     const auto [b, e] = AutoexecBlock(text);
-    if (b == std::string::npos) {
-        r.notes.push_back(L"autoexec.cfg has no ILARTS permissions");
-        return r;
+    if (b != std::string::npos) {
+        text.erase(b, e - b);
+    } else {
+        auto lines = legacy ? AutoexecLegacyLines(text) : std::vector<std::pair<size_t, size_t>>{};
+        if (lines.empty()) {
+            r.notes.push_back(L"autoexec.cfg has no ILARTS permissions");
+            return r;
+        }
+        if (!FileExists(backup) && !CopyFileW(cfg.c_str(), backup.c_str(), TRUE)) {
+            r.problems.push_back(L"Could not back up " + cfg + L" (left unchanged)");
+            return r;
+        }
+        std::sort(lines.rbegin(), lines.rend());  // from the end, so the earlier positions hold
+        for (const auto& [lb, le] : lines) text.erase(lb, le - lb);
     }
-    text.erase(b, e - b);
     const bool onlyOurs = text.find_first_not_of(" \t\r\n") == std::string::npos && !FileExists(backup);
     if (onlyOurs ? !DeleteFileW(cfg.c_str()) : !WriteFileBytes(cfg, text)) {
         r.problems.push_back(L"Could not write " + cfg);
@@ -295,7 +336,7 @@ std::wstring RepairNow() { return RepairText(Repair(true)); }
 // permissions ([install] skip_permissions=1); a missing hook is always reported.
 void StartupCheck() {
     const std::wstring cl = GetCommandLineW();
-    for (const wchar_t* quiet : {L"--test", L"--snapshot", L"--ui-selftest", L"--wait-pid"})
+    for (const wchar_t* quiet : {L"--test", L"--wait-pid"})
         if (cl.find(quiet) != std::wstring::npos) return;
     const std::wstring sg = SavedGamesDcs();
     if (!FileExists(sg)) return;  // no DCS here: nothing to set up
@@ -321,7 +362,7 @@ void StartupCheck() {
 
 // SETTINGS > Installation > Permissions: ADD / REMOVE.
 std::wstring PermissionsNow(bool add) {
-    if (!add) return RepairText(RemovePermissions());
+    if (!add) return RepairText(RemovePermissions(true));
     RepairResult r;
     AddPermissions(r);
     if (r.fixed.empty() && r.problems.empty()) r.notes.push_back(L"autoexec.cfg already allows what the hook needs");

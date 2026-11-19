@@ -9,13 +9,16 @@
 // is a webcam "ILARTS <name>" (MFCreateVirtualCamera, for as long as the viewer runs). Windows' camera service loads
 // ILARTSCam.dll when an application opens one; it makes the shared block (vcam_shared.h) and asks for a size. While
 // it reads, the viewer draws the source at that size, reads it back and writes it into the block - only then.
+// "composite" ([outputs] tiles = a,b): up to four sources in one picture, arranged as a composite stream's.
 // The component: "ILARTS.exe --install-cameras" (admin) copies ILARTSCam.dll to Program Files\DCS ILARTS and
 // registers it; --uninstall-cameras undoes that.
 
 void RecStatus(const std::wstring& text, ULONGLONG ms);
+void RestartSelf();
 
-const wchar_t* kOutSources[ilcam::kCams] = {L"a", L"b", L"plat", L"lso1", L"lso2", L"island"};
-const wchar_t* kOutNames[ilcam::kCams] = {L"Monitor A", L"Monitor B", L"PLAT", L"LSO 1", L"LSO 2", L"Island"};
+const wchar_t* kOutSources[ilcam::kCams] = {L"a", L"b", L"plat", L"lso1", L"lso2", L"island", L"composite"};
+const wchar_t* kOutNames[ilcam::kCams] = {L"Monitor A", L"Monitor B", L"PLAT", L"LSO 1", L"LSO 2", L"Island", L"Composite"};
+std::vector<std::wstring> g_outTiles = {L"a", L"b"};  // [outputs] tiles
 
 std::vector<std::wstring> SplitList(const std::wstring& s) {
     std::vector<std::wstring> out;
@@ -32,6 +35,9 @@ int OutIndex(const std::wstring& src) {
         if (src == kOutSources[i]) return i;
     return -1;
 }
+bool OutComposite(int i) { return !wcscmp(kOutSources[i], L"composite"); }
+// The sources output i draws: its own, or the composite's tiles.
+std::vector<std::wstring> OutKeys(int i) { return OutComposite(i) ? g_outTiles : std::vector<std::wstring>{kOutSources[i]}; }
 
 // ---- Spout
 struct SpoutOut {
@@ -61,6 +67,7 @@ void SpoutCapture() {
         if (!o.tex) {
             video::Engine::Config size;
             size.w = g_engCfg.w & ~1, size.h = g_engCfg.h & ~1;
+            if (OutComposite(i)) size.w = kCompositeW, size.h = kCompositeH;
             const D3D11_TEXTURE2D_DESC td = CanvasDesc(size);
             const std::string name = "ILARTS " + Narrow(kOutNames[i]);
             if (FAILED(app.dev->CreateTexture2D(&td, nullptr, &o.tex)) || FAILED(app.dev->CreateRenderTargetView(o.tex, nullptr, &o.rtv)) ||
@@ -72,13 +79,12 @@ void SpoutCapture() {
         }
         if (now < o.next) continue;
         o.next = now - o.next > step ? now + step : o.next + step;
-        const int s = StreamSource(kOutSources[i]);
-        const ViewState v = s >= 0 ? ViewFor(s) : ViewState{};
+        const std::vector<ViewState> vs = TileViews(OutKeys(i));
         const float black[4] = {0, 0, 0, 1};
         app.ctx->ClearRenderTargetView(o.rtv, black);
         D3D11_TEXTURE2D_DESC d{};
         o.tex->GetDesc(&d);
-        if (v.main) DrawFeed(v, o.rtv, Fit(static_cast<float>(d.Width), static_cast<float>(d.Height), ViewAspect(v), 1.0f), true);
+        DrawTiles(vs, OutComposite(i), o.rtv, static_cast<int>(d.Width), static_cast<int>(d.Height));
         spoutout::Send(o.sender, o.tex);
     }
 }
@@ -100,6 +106,7 @@ struct {
     bool checked = false, api = false;
     CreateVirtualCameraFn create = nullptr;
     HANDLE installer = nullptr;  // --install-cameras / --uninstall-cameras running elevated
+    DWORD serverPid = 0;         // the camera service's process when it started
     std::wstring error;          // why the cameras are not there (last attempt)
 } g_vcamSys;
 
@@ -119,8 +126,8 @@ std::wstring ClsidString(const GUID& g) {
     return b;
 }
 // The component's registered file, if it is registered and there.
-std::wstring VCamComponentPath() {
-    const std::wstring key = L"SOFTWARE\\Classes\\CLSID\\" + ClsidString(ilcam::kCamClsid[0]) + L"\\InprocServer32";
+std::wstring VCamComponentPath(int cam = 0) {
+    const std::wstring key = L"SOFTWARE\\Classes\\CLSID\\" + ClsidString(ilcam::kCamClsid[cam]) + L"\\InprocServer32";
     wchar_t path[MAX_PATH] = {};
     DWORD n = sizeof(path);
     if (RegGetValueW(HKEY_LOCAL_MACHINE, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, path, &n) != ERROR_SUCCESS) return {};
@@ -159,6 +166,10 @@ bool VCamCreate(int i) {
     }
     if (!VCamInstalled()) {
         VCamError(L"Install the camera component first (SETTINGS)");
+        return false;
+    }
+    if (VCamComponentPath(i).empty()) {  // installed before this camera was added
+        VCamError(L"Reinstall the camera component (SETTINGS)");
         return false;
     }
     const std::wstring id = ClsidString(ilcam::kCamClsid[i]);
@@ -236,11 +247,8 @@ void VCamCapture() {
     for (int i = 0; i < ilcam::kCams; ++i) {
         VCamOut& o = g_vcam[i];
         if (!o.reading || !o.ch.out) continue;
-        const int s = StreamSource(kOutSources[i]);
-        const ViewState v = s >= 0 ? ViewFor(s) : ViewState{};
-        ChannelCaptureWith(o.ch, true, [&](ID3D11RenderTargetView* rtv, int w, int h) {
-            if (v.main) DrawFeed(v, rtv, Fit(static_cast<float>(w), static_cast<float>(h), ViewAspect(v), 1.0f), true);
-        });
+        const std::vector<ViewState> vs = TileViews(OutKeys(i));
+        ChannelCaptureWith(o.ch, true, [&](ID3D11RenderTargetView* rtv, int w, int h) { DrawTiles(vs, OutComposite(i), rtv, w, h); });
     }
 }
 
@@ -251,6 +259,10 @@ void OutputsApply() {
     const auto sp = SplitList(b);
     GetPrivateProfileStringW(L"outputs", L"cameras", L"", b, 256, app.iniPath.c_str());
     const auto vc = SplitList(b);
+    GetPrivateProfileStringW(L"outputs", L"tiles", L"a,b", b, 256, app.iniPath.c_str());
+    g_outTiles = SplitList(b);
+    if (g_outTiles.size() > static_cast<size_t>(kMaxTiles)) g_outTiles.resize(kMaxTiles);
+    if (g_outTiles.empty()) g_outTiles = {L"a", L"b"};
     for (int i = 0; i < ilcam::kCams; ++i) {
         const bool s = std::find(sp.begin(), sp.end(), kOutSources[i]) != sp.end();
         if (!s && g_spout[i].want) SpoutRelease(g_spout[i]);
@@ -280,7 +292,9 @@ void OutputsShutdown() {
 bool OutputWants(int s) {
     if (s < 0) return false;
     for (int i = 0; i < ilcam::kCams; ++i)
-        if ((g_spout[i].want || (g_vcam[i].want && g_vcam[i].reading)) && StreamSource(kOutSources[i]) == s) return true;
+        if (g_spout[i].want || (g_vcam[i].want && g_vcam[i].reading))
+            for (const auto& k : OutKeys(i))
+                if (StreamSource(k) == s) return true;
     return false;
 }
 
@@ -290,6 +304,20 @@ std::wstring ProgramFilesDir() {
     ExpandEnvironmentStringsW(L"%ProgramFiles%\\DCS ILARTS", pf, MAX_PATH);
     return pf;
 }
+// Windows' camera service, stopped and started again (it starts on demand too); waits up to 10 s for the stop.
+void RestartFrameServer() {
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!scm) return;
+    if (SC_HANDLE s = OpenServiceW(scm, L"FrameServer", SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS)) {
+        SERVICE_STATUS st{};
+        if (ControlService(s, SERVICE_CONTROL_STOP, &st))
+            for (int i = 0; i < 100 && QueryServiceStatus(s, &st) && st.dwCurrentState != SERVICE_STOPPED; ++i) Sleep(100);
+        StartServiceW(s, 0, nullptr);
+        CloseServiceHandle(s);
+    }
+    CloseServiceHandle(scm);
+}
+
 // Returns the process exit code: 0 done, else a Win32 error / HRESULT.
 int CameraComponentInstall(bool install) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -315,6 +343,7 @@ int CameraComponentInstall(bool install) {
         if (!MoveFileExW(dst.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING)) return static_cast<int>(GetLastError());
         MoveFileExW(old.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
         if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) return static_cast<int>(GetLastError());
+        RestartFrameServer();  // it keeps running the old one until then
     }
     {  // a folder for the component's log that the camera service may write to
         wchar_t pd[MAX_PATH];
@@ -335,11 +364,26 @@ int CameraComponentInstall(bool install) {
     return FAILED(hr) ? static_cast<int>(hr) : 0;
 }
 
+// The camera service's process (0: not running).
+DWORD FrameServerPid() {
+    DWORD pid = 0;
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!scm) return 0;
+    if (SC_HANDLE s = OpenServiceW(scm, L"FrameServer", SERVICE_QUERY_STATUS)) {
+        SERVICE_STATUS_PROCESS st{};
+        DWORD n = 0;
+        if (QueryServiceStatusEx(s, SC_STATUS_PROCESS_INFO, reinterpret_cast<BYTE*>(&st), sizeof(st), &n)) pid = st.dwProcessId;
+        CloseServiceHandle(s);
+    }
+    CloseServiceHandle(scm);
+    return pid;
+}
+
 // Runs this program elevated to install or remove the component (Windows asks the user).
 void CameraComponentRun(bool install) {
     if (g_vcamSys.installer) return;
-    if (!install)
-        for (auto& o : g_vcam) VCamClose(o);
+    g_vcamSys.serverPid = FrameServerPid();
+    for (auto& o : g_vcam) VCamClose(o);  // made again when it is done (a reinstall restarts the camera service)
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     SHELLEXECUTEINFOW si{sizeof(si)};
@@ -355,7 +399,8 @@ void CameraComponentRun(bool install) {
     }
     g_vcamSys.installer = si.hProcess;
 }
-// Done: says so, and the cameras are made again.
+// Done: says so, and the cameras are made again - by a new process of this program if the camera service was
+// restarted meanwhile (this one can no longer make cameras: MFCreateVirtualCamera fails until it ends).
 bool CameraComponentPoll() {
     if (!g_vcamSys.installer || WaitForSingleObject(g_vcamSys.installer, 0) != WAIT_OBJECT_0) return false;
     DWORD code = 1;
@@ -363,6 +408,10 @@ bool CameraComponentPoll() {
     CloseHandle(g_vcamSys.installer);
     g_vcamSys.installer = nullptr;
     const bool now = VCamInstalled();
+    if (!code && now && g_vcamSys.serverPid && FrameServerPid() != g_vcamSys.serverPid) {
+        RestartSelf();
+        return true;
+    }
     wchar_t b[96];
     if (code) swprintf_s(b, L"Camera component: failed (0x%08lX)", code);
     RecStatus(code ? std::wstring(b) : now ? L"Camera component installed" : L"Camera component removed", 8000);

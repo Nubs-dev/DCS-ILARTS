@@ -45,6 +45,30 @@ Output:
 build\Release\ILARTS.dll
 ```
 
+ILARTS.exe's icon: `viewer/ILARTS.rc` embeds `assets/ILARTS-light.ico` (id 1: the file's icon in Explorer, the
+shortcuts and the installer) and `assets/ILARTS-dark.ico` (id 2). At run time the window and taskbar icon contrast
+with the Windows theme: light artwork on a dark taskbar, dark on a light one. The `.ico` files are committed;
+after changing the artwork in `assets/` (PNGs at 24-256 px, SVG source), rebuild them with
+`python tools/make_icon.py` (needs Inkscape for the 16 and 48 px images).
+
+**Version.** A release build is configured with its version, numbers and dots (quoted in PowerShell, which
+otherwise splits the argument at the first dot):
+
+```powershell
+cmake -S . -B build -A x64 "-DDCS_ILARTS_VERSION=1.0.27"
+```
+
+Without it the version is 0.0.0, a development build, and SETTINGS > Installation > Version shows DEVELOPMENT.
+The option is not called `ILARTS_VERSION` because `project(ILARTS)` sets that variable itself (empty). CMake writes
+`<build>/generated/ilarts_version.h` from `src/version.h.in` (`ILARTS_VERSION`, `ILARTS_VERSION_W`,
+`ILARTS_VERSION_BIN`). It is used by:
+- the DLL's version string (`diag.version`, which the hook writes to dcs.log): `ILARTS 1.0.27 (built <date>, verified against DCS ...)`;
+- the viewer: SETTINGS > Installation > Version, a read-only `info` field (`kSettings` in `viewer/console.inc`, shown as an LCD by the page);
+- the VERSIONINFO resource of ILARTS.dll, ILARTS.exe and ILARTSCam.dll (`src/version.rc`, included by `src/ILARTS.rc`, `viewer/ILARTS.rc`, `vcam/ilarts_cam.rc`): Explorer's Properties > Details.
+
+`deploy/package.ps1` reads the three files' product version and refuses to package when it isn't its `-Version`,
+so a stale or development build can't be shipped by mistake. The Build workflow passes the tag's version.
+
 ## Run / loading
 
 The DLL exports two entry points (x64, undecorated names):
@@ -116,7 +140,14 @@ as D3D11 shared textures. Start the viewer at any time (before or after DCS):
 build\Release\ILARTS.exe        # keys 1/2/3 select LSOFRAME / LSOFINALTARGET / LSOSCREEN2
 ```
 
-The title bar shows the target, its size, the received frame rate and the image settings.
+The console's title bar shows the program's source, its size and the received frame rate. Its **?** key
+(`{cmd:'guide'}`, `OpenGuide` in console.inc) opens the user guide with the default PDF viewer: `..\DCS-ILARTS-Guide.pdf`
+from the exe (the packages: `Mods\tech\ILARTS`, one above `bin`), else `..\..\docs\DCS-ILARTS-Guide.pdf` (a
+development build in `build\Release`, which `install.ps1`'s `viewer_path.txt` also starts), else one beside the exe,
+else the PDF on GitHub (`kGuideUrl`). The test log gets `guide: <path or URL>`; with `--test-offscreen` nothing is
+opened. Left of it, only while there is a benchmark, is the benchmark lamp (`state.bench`, see Benchmark below).
+Strings in the state keep their line breaks (`JsonEsc` writes `\n`; other control characters become spaces), so
+tooltips and the monitors' messages can have several lines.
 
 **Console interface.** The window is the ILARTS station: program monitor, preview bank, control desk.
 
@@ -126,51 +157,69 @@ The title bar shows the target, its size, the received frame rate and the image 
 - **Input.** Mouse messages are forwarded with `SendMouseInput` (visual hosting). The page's title bar is the window caption (`WM_NCHITTEST`). Keys arrive through the window, WebView2's accelerator keys, or the page.
 - **Since 2026-11-14:**
   - The monitor wall (`[viewer] console_layout` 1 / 2 / q, `console_second`): monitors A (program) and B, each with a channel strip (source, REC, levels, PTZ) acting on the picture it shows; a rack of shared modules. A layout solver in the page places everything to fill the window, scaling the controls down to 55 % in small windows. The host draws monitor B (rect `second`) with its picture's own levels and analyses it for auto-levels.
-  - Cameras (protocol v7: 6 cameras, 16 shared targets): ISLAND (picture source 30, tracking) and the deck camera's render slots DECK .. DECK 5 (pool 31, 29, 28, 27, 26), each able to show any deck position (`Header::views`). The viewer's sources are logical: ISLAND and each deck position; a position gets a free slot while a monitor on screen shows it (`AssignSlots`, `CameraReconcile`) and gives it back when none does. The 1 + 4 previews are assignable (`[viewer] console_previews`).
+  - Cameras (protocol v7: 6 cameras, 16 shared targets): ISLAND (picture source 30, tracking) and the deck camera's render slots DECK .. DECK 5 (pool 31, 29, 28, 27, 26), each able to show any deck position (`Header::views`). The viewer's sources are logical: ISLAND and each deck position; a position gets a free slot while a monitor on screen shows it (`AssignSlots`, `CameraReconcile`) and gives it back when none does. With the DECK REC switch on, the last position shown (`console_deck`, else the first) keeps a slot too (`DeckRecSource`), so it records off screen; the island camera renders while its REC switch is on. The 1 + 4 previews are assignable (`[viewer] console_previews`).
+  - Deck cycle (console.inc `DeckCycle`, `CycleTick`; page: CYCLE and ▾ in each monitor's SOURCE header, `_cycleList`): monitor A or B steps through the ticked deck positions every `seconds` (2-3600; `[viewer] cycle_a` / `cycle_b`, `_views` = source keys, `_seconds`). Hand-over: the next position becomes wanted first (`CycleWants` in `CameraNeeded`, so `AssignSlots` gives it a free slot and asks for its view), the monitor switches once `ViewFor` has it (slot enabled, `views[p].current` = the position) and the target's frame counter has moved `kCycleFrames` (3) past the first frame seen there, then `CameraReconcile` releases the old position. No free slot, the slot lost, or no picture within `kCycleWait` (4 s): it switches in place. It runs only in the console, with the monitor on the wall showing a deck position, not during a replay; a manual position change restarts the interval, the PTZ stick (`CycleHold`) holds it, and `CycleNext` skips positions shown elsewhere or being brought up by the other monitor. The test log gets `cycle A: X -> Y: slot ... asked for it` and `cycle A: Y shown (ready after t s, slot ...); X slot after release: ...`.
+  - Hangar positions (a view with `hangar = true` in the hook; sent as `NAME\tH`, kept by the DLL as `kViewHangar` in `views[p].names[k][23]`; remembered in `[cameras] known` as `NAME\tH`; viewer `IsHangar`): the page lists them under HANGAR DECK and the others under FLIGHT DECK (`monitors[].hangar`, `sources[].hangar`, `deckGroups` in the page); AUTO is never armed for them (`TrackOf`, `ptzAuto` / `ptzTarget` refused, `trackMode` 1), the PTZ panel hides AUTO / TARGET (`ptz.track` false), and the hook gives a slot showing one no target.
   - Keycap lamps and rocker switches. In layout 1 + 4 the previews show only the sources not on monitor A.
   - Per-source REC switches (`[video] record_<source>`): every recording writes one file per armed source; the main channel (as shown) feeds only the replay ring, black box and stream.
+  - Composite recording (`[video] composite`, the VTR's COMP key): `TakeChannels` gives recordings and stills the channel `g_rec.comp` instead of the per-source channels. It draws the armed sources that have a picture (`compTiles`: by source number, the first four) with `DrawTiles` into 1920 x 1080, at the recording bitrate scaled by pixel count (2.2 Mbit/s at 1024 x 768 gives 5.8 Mbit/s). It runs while the mode is on, so a pass's pre-roll is in its ring, and while a recording or still uses it; `compTiles` is fixed during that time. The per-source channels keep running (they feed the black box and tell which sources have a picture). A mode change applies from the next recording. The test summary (`--test-run`) logs a `composite` line with its size, bitrate and tiles.
+  - Stills (`StillTake`, key P / in DCS Ctrl+Shift+F8, console STILL): the next frame each recording channel reads back after the press goes to a PNG (WIC, on a worker thread, written as `.part` then renamed) in `[video] stills_folder` (default `<mission folder>\Stills`), named `ILARTS <date> <time> <SOURCE> DCS <mission clock>.png`; a channel with no picture for 3 s is reported and skipped.
+  - Replay on every monitor (`ReplayFeed`, console.inc): monitor B's picture and each preview's (unadjusted, half size) feed replay rings of their own (`replay_seconds`), dropped once off screen for a whole ring. A replay takes each ring's footage of A's time span and draws it at A's position; a monitor whose current source has no footage shows live. Saving writes one extra clip per source not on A (`Replay ... <SOURCE>.mp4`).
   - Per-picture levels: `[LSOFRAME]` for the PLAT, `[camera<i>_picture]` for each camera; `app.set` is the program's group (`UseGroup`).
   - PTZ joystick (protocol v5 `Header::ptz` / `ptzState`, integrated by the DLL each frame).
   - No FLIR (removed: too costly); `ptz[i].pictureType` stays in the protocol and the viewer always writes 0.
-  - No ADJ switch: the console keeps every picture's adjustments on (L works in the classic window only).
+  - No ADJ switch: the console keeps every picture's adjustments on (`ConsoleActivate`).
   - Presets hold every picture's levels (the PLAT's under the plain keys of `[preset<n>]`, camera i's under `camera<i>_<key>`).
   - Settings dialog (`kSettings` in console.inc), with restart through `--wait-pid`.
   - The symbology switch is gone; it is always on.
-- **Interface.** The console is the only interface users get (2026-11-15: F2 and `[viewer] ui` removed; the classic window lacks most functions). Without the WebView2 runtime ILARTS offers Microsoft's download page and exits; if WebView2 fails while running, it says so and closes. The classic window remains for the development tests (`--ui classic`, `--ui-selftest`, `--test-presets`, `--snapshot`). The process is per-monitor DPI aware in console mode.
+- **Interface.** The console is the only interface. The classic window (a video pane with a Win32 sidebar) is gone: users lost it on 2026-11-15 (F2 and `[viewer] ui` removed), and its code, its keys (L, F1), `--ui`, its `[window]` and `[sidebar]` ini keys and its tests went on 2026-11-18.
+  - Without the WebView2 runtime (`ConsoleAvailable`), ILARTS says it can't run on this PC, offers Microsoft's download page (`WebView2Notice`, Yes opens it) and exits with 1. A missing `ui` folder gets its own message (reinstall).
+  - If DirectComposition or WebView2 cannot start (`ConsoleActivate` false), or WebView2 fails while running (`ConsoleFail`: the browser process ended, environment or controller errors), ILARTS says so, offers the download page and closes. The test log gets `console failed: notice shown`. A page (render) process that fails is reloaded instead.
+  - The process is per-monitor DPI aware.
 - **Experimental features** (`[experimental]`, SETTINGS > Experimental, marked ⚠): `flir` shows a FLIR key on each camera's PTZ panel; the viewer then writes `ptz[slot].pictureType = 4` for that camera's render slot (`g_flirOn`, not saved: every session starts normal). The packages always ship the island and deck cameras (`EXTRA_CAMERAS = true` is enforced by `deploy\package.ps1`).
+- **Camera tuning** (`[developer] tuning`, SETTINGS > Developer > Camera tuning; `viewer/tuning.inc`): for placing cameras by eye while DCS runs. Development builds only (`DevBuild()`: version 0.0.0, built without `-DDCS_ILARTS_VERSION`): a release build shows no Developer panel and ignores `[developer] tuning` in the ini; not in the user docs until it gets a proper interface. Each camera's PTZ panel gets a TUNE key that opens a panel for the camera on that monitor (ISLAND or the deck position shown): POS X / Y / Z and LOOK X / Y / Z (the look-at point) in metres along the carrier's axes (x forward, y up, z starboard; shown in feet as well), each with − / + (they repeat while held), FOV − / + (1 deg), STEP 0.1 / 0.5 / 1 m (`[developer] tuning_step`), RESET and COPY (the entry's Lua line to the clipboard).
+  - Values: from the hook (protocol v9 `Header::camPose[slot]`: the rest pose last sent with `extra_cam('set')`, under the name of the view shown), so they include the user's own entries in the tuning file. The panel uses them only while `camPose.name` is the camera's name; otherwise it shows dashes and its keys are off.
+  - Writing: ILARTS owns one section of `Saved Games\DCS\Config\ILARTS-cameras.lua`, the last thing in the returned table, so it wins over the user's entries for the same name:
+    ```lua
+        -- ILARTS developer tuning: begin
+        { name = 'HANGAR FWD', pos = { 54.7, 18.7, 4.0 }, look = { -60.1, 10.5, 0.0 }, fov = 51 },
+        -- ILARTS developer tuning: end
+    ```
+    Everything else is kept byte for byte; without a section one is added before the table's closing brace (with a comma after the last field if it has none), and without a file a new one is written. A small Lua scanner (comments, quoted and long-bracket strings) checks that the result is still `return { ... }` with balanced braces before it is written. UTF-8 without a BOM (a BOM is dropped), the file's own line endings, written to `ILARTS-cameras.lua.ilarts-tmp` and moved over the old file (`MoveFileEx`; if the hook has it open, the next tick tries again), at most every 0.3 s. A file the section can't be added to (not `return { ... }`, half a section) is left alone and the panel shows an alert. The file is read again when its write time changes (an edit by hand).
+  - RESET takes the entry out of the section; the hook then puts back its own values (`C.orig`, docs/FINDINGS.md). Until the slot's `camPose.seq` moves (or 2.5 s pass) the panel waits, so a nudge never starts from the old values.
+  - PTZ: a new rest pose takes the camera off the joystick in the DLL (`Aim::rest`, fov included), so the picture shows the new rest view.
+  - Saved Games: `SavedGamesDcs()` (repair.inc). `--test-saved-games <dir>` replaces it, for tests (repair and the permissions check use it too).
 - **Build.** The SDK is in `third_party/webview2` (NuGet Microsoft.Web.WebView2 1.0.2903.40; the loader is linked statically). CMake copies `ui/index.html`, `ui/ilarts-console.js` and `ui/fonts` next to the exe.
 - **Tests** (`--test-run` and `--test-log` as usual):
   - `--test-offscreen` renders the window off the screen;
   - `--test-script file` takes lines of `seconds<TAB>` followed by one of: JavaScript, `!shot`, `@vk` (a key), `^x,y` (a click) or `?x,y` (a hit test);
   - `--test-commands` logs the page's commands;
-  - `--ui console|classic` chooses the interface.
+  - `--test-no-webview2` behaves as if the WebView2 runtime were missing: the notice appears and ILARTS exits.
+  - Presets, keys and sources are checked through the page: a script calls `_cmd('preset', {index, save})`, `_cmd('rename', ...)`, presses keys (`@38` Up, `@82` R, `@116` F5, `@49`..`@51` sources) and reads `_state` back (`presets`, `flash`); a second start checks that the presets come back from the ini. These replace the classic window's `--test-presets`, `--ui-selftest` and `--snapshot` (2026-11-18); `!shot` and `--test-keys "t:!"` save the pictures and the window.
+  - To test the failure notice, end the WebView2 browser process (`msedgewebview2.exe` whose parent is the test ILARTS). In a scratch copy, give the WebView a user data folder of its own first (`ConsoleStart`: `%LOCALAPPDATA%\ILARTS\WebView2`), or the browser process is shared with a running viewer.
 
-**Classic window.** It has a video pane (aspect ratio locked to the selected feed) and a sidebar with the
-controls: feed and mode selectors, switches (adjustments, auto-levels) and sliders
-(exposure, brightness, contrast, gamma). Drag a slider, double-click it to reset it, or use the
-mouse wheel over it to step it. Every control also has a key. Settings are saved in `build\Release\ILARTS.ini` (an old lso_viewer.ini is copied over once).
+**Keys.** The defaults below; `[keys]` in the ini (SETTINGS > Keyboard) rebinds them (`kKeyActions`). The source keys,
+the numeric keypad's + / -, Ctrl + a preset's key and the replay's keys are fixed. Settings are saved in
+`build\Release\ILARTS.ini` (an old lso_viewer.ini is copied over once).
 
 | Key | Control |
 |---|---|
-| 1 / 2 / 3 | feed: PLAT camera / LSO 1 (station screen) / LSO 2 (cue panel) |
-| 4 / 5 | feed: extra camera 1 / 2 (island, catapult station) when DCS offers them; selecting one switches it on |
-| C | CCTV look on/off (scan lines, grain / static, lens distortion, vignette; strength slider in the sidebar) |
+| 1-5 | monitor A's source in the console's order: PLAT, LSO 1, LSO 2, ISLAND, DECK (5 picks a deck position as the DECK key does: the one monitor A shows, else the last one shown if no other monitor has it, else the first free one); the lit one again turns monitor A off |
+| C | CCTV look on/off (scan lines, grain / static, lens distortion, vignette; strength in SETTINGS > CCTV look) |
 | B | save the black box now |
-| L | all adjustments of the picture on program on/off (classic window only; off = DCS image untouched; mode and values are kept) |
+| P | still of every armed source |
+| N / Shift+N | next / previous carrier for the PLAT |
 | + / - | exposure, 1/3 EV (pipeline mode) |
 | Up / Down, Right / Left, PgUp / PgDn | brightness, contrast, gamma |
 | A | auto-levels: darkest 0.5% .. brightest 99% stretched, symbology excluded, max gain 25x |
 | R | reset adjustments |
 | F5 | the built-in Night preset (fixed: +0.91 EV, brightness +0.13, contrast x1.5, gamma 1.2, auto-levels) |
-| F6-F8 / Ctrl+F6-F8 | load / save presets 1-3: each holds the levels of every picture (the PLAT and each camera) (sidebar: click = load, Shift+click = save, right-click = save / rename / clear) |
-| F1 | hide / show the sidebar (classic window) |
+| F6-F8 / Ctrl+F6-F8 | load / save presets 1-3: each holds the levels of every picture (the PLAT and each camera) (console: click = load, Ctrl or Shift+click = save, right-click = save / rename / clear) |
 | V | start / stop a manual recording (MP4) |
 | M | recording mode: manual / automatic (every approach the PLAT sees, one file each, overlapping ones at the same time) |
-| Space | instant replay of the last approach (else the last 30 s); in the replay: Space pause, Left/Right 2 s or one frame, `,` `.` one frame, Up/Down speed, Home start, S save, Esc live |
-| Ctrl+Shift+F9 / F10 / F11 | record / instant replay / save the black box while DCS has the keyboard |
-
-The sidebar's sections fold (click a heading; remembered in the ini) and the sidebar scrolls with the mouse
-wheel when it is taller than the window (minimum window height 600).
+| Space | instant replay of the last approach (else the last 30 s); in the replay: Space pause, Left/Right 2 s or one frame, `,` `.` one frame, Up/Down speed (1/8x to 8x), Home start, S save, Esc live |
+| Esc | close ILARTS |
+| Ctrl+Shift+F9 / F10 / F11 / F8 | record / instant replay / save the black box / still while DCS has the keyboard |
 
 Recording (viewer/video.h): the picture as shown is drawn again into a 1024x768 canvas at 30 fps, read
 back, JPEG-encoded into a 45 s replay ring and, while recording, encoded to H.264 MP4 with Media
@@ -180,6 +229,44 @@ picture within 2 nm and ends at the trap, bolter or wave-off; the file starts 3 
 after. Passes that never get below 150 m within 1200 m of the camera (overhead break arrivals) are
 dropped. Files go to `Videos\DCS ILARTS`; the `[video]` section of ILARTS.ini changes folder, size, fps,
 replay length, pre/post-roll, bitrate, encoder and the file name.
+
+Whose passes automatic mode records (protocol v8; console ACFT key, `[video] auto_filter =
+own|section|flight|all`, default all). The hook decides whose each pass is, so the viewer matches no names: per pass
+`Header::passFlags[i]` (bits `kPassOwn` 1, `kPassSection` 2, `kPassFlight` 4; your own aircraft sets all three) and
+`Header::ownAircraft` (0 not reported, 1 you have an aircraft or had one this mission, 2 none). Your aircraft is
+`world.getPlayer()` in single player and the slot's unit (`myUnitName()`) in multiplayer, read in FEED_QUERY (host /
+single player: group from `Unit:getGroup()`, number from `Unit:getNumber()`) or, as a client, from the slot's runtime id
+(`DCS.getUnitProperty(slot, UNIT_RUNTIME_ID)` = the export object id that client candidates are keyed by) with group and
+number from the mission file (`missionUnits()`; a candidate's number by name, else by matching its group's units'
+runtime ids). Section = same group and `ceil(n / 2)` equal (units 1-2, 3-4). The hook keeps the last aircraft you had
+this mission (`state.meLast`, cleared with the per-mission state) and matches against it while you have none (landed and
+went to the LSO station, released the slot), so `ownAircraft` is 2 only when you have flown nothing yet this mission;
+the console then shows NO ACFT (amber) while AUTO is on and the filter is not ALL ACFT. A hook older than the DLL leaves
+`ownAircraft` 0, and the viewer then records every pass. Viewer and DLL ship together and the viewer accepts only its
+own protocol version, so an older producer is not read at all. The filter decides only whether a new pass starts an
+automatic recording (`AutoWantsPass`); passes, grades, the black box and manual recording are unchanged. Hook log:
+`PASS your aircraft: ...` when it changes, and `group <name> #<n>, whose <flags>` on each `PASS ... start` line.
+
+Mission folders and the storage limit (viewer/recfiles.inc): every file (`UniqueVideoPath`, stills) goes into
+`<recordings>\<date> <HHMM> <mission>`, one folder per mission = DCS process + `Header::passEpoch` (the hook
+makes a new epoch at every mission start or restart), named after protocol v8's `Header::missionName` (hook:
+`DCS.getMissionName()`, else the .miz name; written with the symbology lines as `mission_name=`) and the time the
+viewer first saw the epoch (a name already taken, e.g. a restart in the same minute, gets " (2)"). The folder is
+created with its first file (`SessionFolder`); a recording keeps the
+folder it started in when it is renamed or the mission changes. Before any mission the name is
+`<viewer start> No mission`. A set `[video] stills_folder` is used as is (no per-mission folder). The storage limit
+(`[video] storage_limit`, `storage_limit_gb`; ini values below 1 GB down to 0.01 work, for tests) runs on a worker
+thread (`store::Worker`): before a recording, still, black box save or replay save, after every saved file and
+every 30 s while recording. It counts every file under the recordings folder (and a stills folder elsewhere),
+adds what the files being written may still need (a pass: bit rate x (pre-roll + 240 s + post-roll) minus its
+size so far; a manual recording: 5 more minutes; a still: w x h x 3; a black box save: the rings' bytes) and
+deletes the oldest (last write) files on the ledger `<recordings>\.ilarts-files` (hidden, UTF-8, one path per
+line, relative to the recordings folder; every path ILARTS hands out is appended; entries whose file is gone are
+dropped when it is loaded) or their `.part` leftovers. A file is opened with `DELETE` and no sharing first, so an
+open file is never deleted. Then it removes empty folders below the recordings folder that it emptied, or that
+are named like a mission folder or `Stills`, except the current mission's.
+Mixed versions: the viewer reads only a header of its own `kVersion`; a v8 viewer cannot map an older DLL's smaller
+mapping and tries again every second (closing the handle each time), and an older viewer ignores a v8 header.
 
 File names: `[video] filename`, default `{date} {time} {callsign} Case {case} {grade}`, e.g.
 `2026-11-13 21-04-10 Viper Case III (OK) wire 3.mp4`. The hook publishes per pass (protocol v4) the
@@ -200,7 +287,8 @@ RTMP publisher written for this (handshake, AMF0 connect / createStream / publis
 track, server chunk sizes, pings, acknowledgements, reconnect; no TLS), configured in `[stream] url / key`.
 Up to four streams (`[stream]`, `[stream2]` .. `[stream4]`), each with a `source`: monitor A (`a`, the
 main encoder's units), monitor B, a fixed source, or `composite` - up to four `tiles` in one 1920 x 1080
-picture. Every source but `a` has its own canvas and encoder.
+picture. Every source but `a` has its own canvas and encoder. A `label` (up to 6 characters) replaces the
+target's number on its console key and in the status LCD.
 
 Extra cameras (src/extra_cams.cpp): fixed
 cameras on the carrier, rendered by DCS as additional picture sources next to the PLAT's. The hook holds
@@ -213,6 +301,22 @@ island camera) follows the landing aircraft from the round down until, trapped, 
 the landing area without stopping, or it climbs 50 ft above the deck. Far from the carrier (main camera beyond 70 km) every view at the carrier - PLAT and extra
 cameras - is rendered against one shared origin next to the PLAT camera (plat_origin.cpp): DCS shares an
 object's placement between the views of a frame, so they must all use the same one.
+
+Your own aircraft in those views (src/own_canopy.cpp, hook `OWN_CANOPY`): DCS hides the canopy, frame and pilot of
+your external model with draw argument 114 while you sit in the cockpit, for every view of the frame. The DLL
+wraps NGModel's per-object parse (`NGModelLodsMT::ParseMT2`, vtable slot 31): when an object with argument 114
+set is seen by one of ILARTS's views, those views' collections are parsed separately with a copy of the arguments
+in which 114 is 0, and NGModel's per-LOD instances for that parse come from the cookie's spare slots (slot +
+number of LODs, through the redirected call at NGModel+0x3DBE4), so DCS's own views keep theirs. The number of
+LODs is the model's LOD entry count (+0x5A0) minus its first drawn entry (+0x5B0); more than 8 LODs, or a spare
+slot already bound to another LOD, leaves that parse or fetch to DCS. Another instance with 114 = 0 that uses the
+same graphics instance (cookie) as your aircraft is split the same way. ILARTS's views
+are reported by plat_origin's view setup hook (picture-source views at the PLAT or an extra camera) and matched
+by camera position (CollectionInfo +0x318). Needs the PLAT origin hooks; details in docs/FINDINGS.md. It always
+logs (no VERBOSE): an `OWNCANOPY stats 15s` line (60 at most), the first object with argument 114 set, up to
+6 objects within 15 m of your camera with their model name and non-zero arguments 0..150, `OWNCANOPY near:` lines
+(8 per 15 s for the first 30 windows: instance, graphics instance, collections by view, what was done, the LOD
+slots used and the 114 each holds), and `OWNCANOPY not split` when a model's LOD table rules out the split.
 
 PLAT processing applies to PLAT and to the camera window of LSO 1: the LSO station composites
 LSOFRAME into x 192..831, y 150..629 of its 1024x768 frame with tint (0, 1.005, 0.752); the viewer
@@ -227,18 +331,146 @@ Testing without DCS:
 
 ```powershell
 build\Release\share_selftest.exe                                   # sharing self-test, both GPUs
-build\Release\share_selftest.exe --serve <LSOFRAME-*.dds> 60       # publish a captured frame
-build\Release\ILARTS.exe --auto --snapshot out.bmp --frames 120 # save what the viewer shows
+build\Release\share_selftest.exe --serve 60 <LSOFRAME-*.dds>       # publish a captured frame (seconds, then the frame)
+build\Release\share_selftest.exe --serve 42 --passes 1:7,6,4,0 <LSOFRAME-*.dds>  # also fake passes: ownAircraft, then each pass's flags
+build\Release\ILARTS.exe --test-run 10 --test-keys "6:!" --test-log out.log  # save what the viewer shows (out.log.6.bmp)
+build\Release\own_canopy_test.exe "C:\Program Files\Eagle Dynamics\DCS World"  # own-canopy wrappers; patches on the mapped NGModel.dll
 ```
+
+`share_selftest.exe --serve <seconds> --cams <n> <LSOFRAME.dds>` also stands in for the extra cameras: ISLAND and
+the deck slots DECK .. DECK 5, each with n positions (the hook's 15 names, its 6 hangar ones marked as hangar, then
+HANGAR 7 ...). A camera starts
+rendering 250 ms after it is asked for (frames counted only while it renders), a slot reports a requested position
+as current after 120 ms and its picture follows 2 frames later; each picture is grey with one white bar per position
+number (the island: a diagonal). It prints each change with its time (`cam DECK 2 on`, `cam DECK view 2 CROTCH`,
+`cam DECK 2 off`), and what each camera asked for should follow, with its position (`cam DECK 3 track 1 at HANGAR
+FWD`: 1 = nothing), so a test log shows the order of slot changes and that no hangar position gets a track mode.
+Each camera's pose (`Header::camPose`, v9) is the hook's CAMERAS value for what it shows; with `--tuning <file>` (an
+`ILARTS-cameras.lua`, before the .dds files) the producer reads that file every 0.5 s like the hook and applies its
+entries in order, printing `tuning file read: n entries` and each pose change (`cam DECK 2 pose HANGAR FWD pos 54.7
+18.7 4 look -60.1 10.5 0 fov 51`).
+
+Camera tuning end to end (scratch copy, its own mapping and `LOCALAPPDATA`): a scratch folder with
+`Config\ILARTS-cameras.lua` stands in for Saved Games; `share_selftest --serve 28 --cams 15 --tuning
+<dir>\Config\ILARTS-cameras.lua <LSOFRAME.dds>`, then `ILARTS.exe --test-saved-games <dir> --test-commands
+--test-script ...` with `[developer] tuning=1` in the scratch ini. A script selects a position
+(`_cmd('source', {id: 'hangar_fwd', mon: 0})`), clicks TUNE, presses the panel's keys (pointerdown / pointerup on
+`[data-tn=pos][data-ax="1"][data-dir="1"]` ...) and reports the panel's text with a made-up command
+(`_cmd('probe', {text})`, logged by `--test-commands`); the log has `tuning: wrote <file> (n entries)` and `tuning:
+copied <line>`.
+
+With `--passes`, pass n is under way from 6 + 8 (n - 1) s for 4 s. With `--test-log`, the viewer logs each new pass as
+`auto pass <id> flags <f> own <o> filter <filter>: record|skip`.
 
 The viewer's hidden test switches (`--test-record S`, `--test-replay`, `--test-auto`, `--test-run S`,
 `--test-keys "t:key,..."`, `--test-cam mask`, `--test-stream`, `--test-log file`) drive it against a
-stand-in producer.
+stand-in producer. The summary at the end of a test run names the mission folder and what the storage limit did.
+`share_selftest.exe --serve <seconds> [--mission NAME ...] [--mission-every S] <LSOFRAME.dds>` also stands in for
+the hook's mission: `passEpoch` and `missionName`, with the next mission (a new epoch) every S seconds (10).
+`ILARTS.exe --test-storage <folder> [--test-log file]` builds a recordings folder in `<folder>`, runs the storage
+limit on it (ILARTS's and other files, a `.part` leftover, an open file, a stills folder elsewhere, empty mission
+and user folders) and checks what is left; the exit code is the number of failures.
+
+### Benchmark
+
+SETTINGS > Benchmark (`[benchmark] next_mission`) arms one run for the next mission start; it measures DCS's own frame
+times stage by stage and writes a report. Three parts share a block of their own, `<kMappingName>_Bench`
+(`src/bench_protocol.h`): it has to exist before the share does, since stage 1 runs with nothing shared.
+
+- **DLL** (`src/bench.cpp`, Lua `diag.bench(action, ...)`): `armed` reads `[benchmark] next_mission` from the
+  `ILARTS.ini` beside the ILARTS.exe it starts (`ViewerExePath`: `bin\viewer_path.txt` or beside the DLL; `launch_viewer`
+  uses the same and starts the viewer for an armed run even with `[viewer] auto_start=0`). `begin` makes the block
+  (once per process, never unmapped, because the render thread may be writing to it), starts a session (`session` + 1,
+  `hookState` holding, the hook's `info` lines plus `dcs=`), and installs the renderer callback with no frame function
+  (`EnsureRenderCallback(nullptr)` keeps the share's). From then on `BenchFrame` (render_callback.cpp, event 6 =
+  `Renderer::EndFrame`, render thread) writes the QPC time since the previous EndFrame into `frameMs[frames % 16384]`
+  and then increments `frames`: no lock, one writer. It stops at `ended`. `tick` (paused flag, `hookTick`), `who`
+  (the player changed: new info, `whoSeq` + 1), `release` / `ended`, `poll` (the viewer's command, seconds since it
+  last looked, its stage text) and `disarm`.
+- **Hook** (`BENCHMARK`, `benchStep`): when armed at `onSimulationStart`, the clouds probe is not installed there and
+  `step()` returns before anything starts (sharing, keep PLAT, synthetic PLAT, PLAT UI, map objects, PLAT origin, own
+  canopy, cameras) until the viewer sends `release`; `START_DELAY` runs meanwhile. What runs in stage 1: the DLL
+  loaded, its renderer callback (counters and the frame timer), the compat check, the hook's per-frame callback (it
+  returns at once) and its once-a-second step (compat gate, `benchStep`: pause flag, player check, poll), and the
+  viewer process itself. No viewer within `BENCH_VIEWER_WAIT` (60 s), or none for 20 s while holding: it disarms the
+  switch and starts as usual. `onSimulationStop` and the error path report `ended`; ILARTS.log gets `BENCH` lines for
+  every state and stage change.
+- **Viewer** (`viewer/bench.inc`, `BenchTick` every loop): opens the block, stamps `viewerTick`, and starts a run when
+  it sees a session holding that it has not run (`doneSession`); a session already released that it did not start
+  (the viewer was restarted during it) is closed with `done`. Starting writes `next_mission=0`. The stages
+  (`bench::Plan`): hook only, PLAT / LSO 1 / LSO 2 (sends `release`), then n = 1..5 views, each with recording off
+  and on. While a run is active, `CameraNeeded` returns `BenchWantsCamera` (the stage's views: the fixed cameras
+  first, then flight deck positions, then hangar ones, at most as many positions as the deck camera has render slots),
+  `RecArmed` returns `BenchRecArmed` (the PLAT and each view, in recording stages only), composite mode is off, and
+  manual and pass recordings are refused. Nothing is written to the ini, so the user's cameras, REC switches and
+  monitors come back by themselves (`CameraReconcile`) when the run ends. **Start:** a run first waits
+  (`BenchWait`, stage text `starting`) until the mission has run `kBenchStartS` (10 s) without a break: not paused and
+  the player in place (the info's `player=` line says "in an aircraft", or 20 s without one in single player, 60 s in
+  multiplayer: spectators, slot choice). A player change before or during stage 1 goes back to that wait. (2026-11-19:
+  the first run measured stage 1 at mission start, partly paused on the briefing screen and while DCS was still
+  loading, so later stages had better lows than stage 1.) **Pause:** `BenchHalted` = the hook's `paused` flag
+  (`DCS.getPause`, once a second) or no hook step for `kBenchHookStaleMs` (2.5 s). While halted, and
+  `kBenchResumeS` (3 s) after, every clock stops (settling, measuring, the wait) and no frame time is taken. When a
+  pause is seen during a measurement, its last `kBenchRollbackS` (4 s) of frames are taken back with the clock
+  (`BenchRollback`, from `marks`: the hook reports up to a second late); a stage is marked PAUSED only when the pause
+  may have begun before that (the viewer was stalled). The stage text gets " (paused)", the status `· PAUSED`, the
+  hook logs `BENCH DCS paused` / `BENCH DCS running`. Settling before the 20 s measurement: 10 s
+  for stage 1 (after the start wait); the PLAT's picture + 8 s for stage 2; every view's picture + 6 s (no picture after 30 s: measured
+  anyway, noted); a recording stage starts the recording once every recorded source's channel has pictures, then 5 s.
+  Recording stages call `Engine::beginRecording(kBenchRecKey, video::kNullSink, now)` on those channels: the same
+  Media Foundation sink writer and encoder as a file, into `video::NullStream` (an `IMFByteStream` that keeps only
+  its position and length; asynchronous calls complete at once), so the encoding costs what a recording costs and
+  nothing reaches the disk; the engine reports the frames and bytes encoded (`Discarded` event, key `kBenchRecKey`).
+  It stops (and reports what it measured) when the session changes, the hook reports `ended` (mission end, no viewer),
+  the player changes after stage 1 (during stage 1 the stage starts again), no frame arrives for 5 s, the share goes
+  away, or ILARTS closes.
+- **Mission** (`deploy\Missions\ILARTS Benchmark.miz`, Caucasus, CVN-71, the player in an F/A-18C parked hot on deck):
+  the scene the how-to names. `package.ps1` puts it at `Missions\ILARTS Benchmark.miz` in all three packages (the
+  installer's uninstall removes it); `install.ps1` copies it when missing or different and `-Uninstall` removes it
+  while it is still identical. Not under `reference/`, which the public export leaves out.
+- **Lamp** (`BenchLamp`, `state.bench = {state, tip}` or null): `armed` (`next_mission=1`, no run), `running`,
+  `complete`, `error` (stopped, with the reason in the tooltip). The page shows it in the title bar only while there
+  is a state (`hidden`, no space taken): armed and complete steady green, running flashing amber (`.blink`), error
+  red. A click while armed or running opens SETTINGS scrolled to the Benchmark panel (its frame lit for a moment);
+  after a run it sends `{cmd:'benchLamp'}`: the run's report opens (a stopped run's too, if it measured anything) and
+  the lamp goes out. The result is kept in memory only: it lasts until clicked or ILARTS closes; arming again
+  puts it away. The Benchmark panel's **i** (`SectionTip`, a section's `tip`) is the how-to.
+- **Statistics** (`bench::Compute`): average FPS = frames / their summed frame time; 1% and 0.1% low = 1000 / the
+  99th and 99.9th percentile frame time (nearest rank). Deltas against stage 1: fps, ms per frame and percent. ILARTS
+  CPU = this process's CPU time / wall time / logical processors.
+- **Report** (`bench::WriteReport`): `%LOCALAPPDATA%\ILARTS\benchmarks\ILARTS benchmark <date> <time>.html` (one
+  self-contained page) and `.json` (every stage's numbers). The header: ILARTS and DCS versions, graphics card (the
+  share's adapter LUID), processor, DCS's window (its largest visible top-level window's client area), mission,
+  carrier, aircraft and role (the hook's info), recording settings and encoder, and what else ran (black box, streams,
+  Spout, virtual cameras, CCTV look).
+
+Tests:
+
+```powershell
+ILARTS.exe --test-bench-report <folder> --test-log <file>   # statistics unit tests + a sample report in <folder>; exit code = failures
+share_selftest.exe --serve 200 --cams 15 --bench 8 [--bench-end S] [--bench-who S] [--bench-board S] [--bench-pause S:D] [--bench-stall S:D] <LSOFRAME.dds>
+ILARTS.exe --test-run 180 --test-offscreen --test-log <file> --test-bench-seconds 4   # with [benchmark] next_mission=1 in its ini
+```
+
+`--bench <ms>` makes share_selftest stand in for the hook: the bench block holding, the share hidden (magic 0) until
+the viewer releases it, and a thread writing made-up frame times (<ms> + 0.9 once released + 1.1 per camera
+rendering, jitter and hitches); `--bench-end S` ends the mission at S s, `--bench-who S` changes the player,
+`--bench-board S` keeps the player out of an aircraft until S s, `--bench-pause S:D` sets the paused flag from S s for
+D s (the hook keeps stepping, as in DCS), `--bench-stall S:D` stops `hookTick` from S s for D s.
+`--test-bench-seconds S` measures S s per stage and shortens the settling in proportion. The test log gets `bench:`
+lines: each stage, `measuring`, its numbers, `recording n sources into the null sink`, `null sink: <frames> frames,
+<bytes> bytes`, `waiting until the mission has run ...`, `DCS paused` / `DCS running again`, `measurement taken back
+to ... s`, and `run complete; report <path>` or `run stopped: <why>`. Each null-sink count arrives from its encoder
+after the recording ends, so after the last stage the report waits for them (`BenchReport`, at most 3 s; closing
+ILARTS writes it at once): without that the last stage showed 0 encoded frames. A click on the lamp after a run logs
+`benchmark report: <path>`. The lamp is checked through the page (`state.bench`, the `[data-b=benchLamp]` button's
+`hidden`, its `.lamp`'s computed opacity over a second for the flashing). Run it in the scratch copy (renamed
+`kMappingName`, `LOCALAPPDATA` pointed at a scratch folder, which also takes the report).
 
 ## DCS compatibility check (after DCS updates)
 
 Every address, offset and expected byte in src/ is for one DCS build (`engine.h: kVerifiedBuild`). At
-mission start the DLL runs `compat.cpp`: on the verified build it runs; on another build it compares 43
+mission start the DLL runs `compat.cpp`: on the verified build it runs; on another build it compares 52
 code fingerprints (`src/compat_sigs.inc`: every patched site, every called function, the code that holds
 the offsets it uses, the instructions through which DCS reads the globals it reads; relocated bytes
 masked) plus the DCS.exe globalView vtable and slot 31 with the running DCS. All identical: it runs as
@@ -256,11 +488,12 @@ python tools\gen_compat.py "C:\Program Files\Eagle Dynamics\DCS World"   # needs
 ## Distribution package
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy\package.ps1 -Version 1.0.26
+powershell -ExecutionPolicy Bypass -File deploy\package.ps1 -Version 1.0.27
 ```
 
 builds, from one staged Saved Games layout (`Mods\tech\ILARTS\bin\...`, `Mods\tech\ILARTS\README.txt`,
-`Scripts\Hooks\ILARTS-hook.lua`; nothing at the root, which a mod manager would copy into Saved Games):
+`Scripts\Hooks\ILARTS-hook.lua`, `Missions\ILARTS Benchmark.miz` from `deploy\Missions`; nothing at the root, which
+a mod manager would copy into Saved Games):
 - `dist\DCS-ILARTS_v<version>.zip` for Open Mod Manager: one folder named like the zip, and `modpack.xml` at the
   root (`<Open_Mod_Manager_Package>`: `<install>` = the folder, `<category>`, `<description>` from
   `deploy\mod-description.md`, `<thumbnail>` = `deploy\thumbnail.png` as a one-line PNG data URI). OMM reads the
@@ -282,10 +515,32 @@ DLL's last compatibility result (`[dcs]` in the ini, from `Header::compat`).
 
 Outputs (`viewer/outputs.inc`): Spout senders (Spout2 SDK's SpoutDX in `third_party/spout`, BSD) and virtual
 cameras (`vcam/`: ILARTSCam.dll, a Media Foundation media source per source for Windows 11's Frame Server,
-fed through `Global\ILARTSCam<i>` - see `vcam/vcam_shared.h`). It refuses to package while a development switch in the hook (`VERBOSE`, test captures, traces,
+fed through `Global\ILARTSCam<i>` - see `vcam/vcam_shared.h`). Both offer the same seven sources, the last
+`composite`: up to four `[outputs] tiles` in one picture, laid out like a composite stream (1920 x 1080 for
+Spout; the size the application asks for on the camera). A camera component installed before the composite
+camera existed lacks its class, and the viewer asks for a reinstall. It refuses to package while a development switch in the hook (`VERBOSE`, test captures, traces,
 A/B modes) is on, and it switches the extra cameras off in the packaged hook unless `-Experimental` is
 given (they have not been confirmed in DCS yet). The viewer goes into the mod's `bin` folder, where the DLL starts it from when there is
 no `viewer_path.txt` (that file is only written by `install.ps1` for development).
+
+### Release build on GitHub Actions and signing
+
+`.github/workflows/build.yml` runs in the public repo only (`Nubs-dev/DCS-ILARTS`; it is skipped in the private
+one). A pushed tag `v<version>`, or a manual run with a version, builds `ILARTS`, `lso_viewer` and `ilarts_cam` with
+CMake on `windows-latest`, installs Inno Setup if the runner lacks it, runs `package.ps1`, and uploads the three
+packages as the artifact `DCS-ILARTS-<version>`.
+
+Signing is SignPath Foundation's free certificate for open-source projects (`docs/CODE-SIGNING.md`, the policy
+page they require; the README links it). It runs only when the repo variable `SIGNPATH_ORGANIZATION_ID` is set,
+together with `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_POLICY_SLUG` and the secret `SIGNPATH_API_TOKEN`. Two signing
+requests, each waiting for an approver in SignPath (up to two hours):
+1. `ILARTS.exe`, `ILARTS.dll`, `ILARTSCam.dll` (artifact configuration `binaries`, `deploy/signpath/binaries.xml`),
+   copied back into `build\Release` so every package carries the signed files;
+2. the installer built from them (`installer`, `deploy/signpath/installer.xml`).
+
+The Inno Setup uninstaller is written at install time and is not signed. To check the public tree builds on its
+own, export it (`python -I tools/export_public.py <scratch folder>`) and run the same CMake and `package.ps1`
+there.
 
 ## Output
 

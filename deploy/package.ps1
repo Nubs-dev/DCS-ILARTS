@@ -1,5 +1,5 @@
 # Builds the distributables of DCS ILARTS from a finished Release build.
-#   powershell -ExecutionPolicy Bypass -File deploy\package.ps1 -Version 1.0.26 [-NoInstaller]
+#   powershell -ExecutionPolicy Bypass -File deploy\package.ps1 -Version 1.0.27 [-NoInstaller]
 # -Version: numbers and dots (mod managers read it from the file name). Output in dist\:
 #   DCS-ILARTS_v<version>.zip          Open Mod Manager (OMM): one folder named like the zip, holding the Saved
 #                                      Games\DCS layout; OMM takes the version from "_v<version>".
@@ -15,6 +15,8 @@
 #     restores the hook from), ui\..., licence notices
 #   Mods\tech\ILARTS\README.txt
 #   Scripts\Hooks\ILARTS-hook.lua
+#   Missions\ILARTS Benchmark.miz (the benchmark's scene, from deploy\Missions; the installer's uninstall removes
+#     it with the rest)
 # Nothing at the root: a mod manager would copy it into Saved Games\DCS itself.
 # The hook's development switches (VERBOSE and the test / investigation flags) must be off; the script refuses to
 # package otherwise; the island and deck cameras (EXTRA_CAMERAS) must be on. (Experimental features such as FLIR are
@@ -34,7 +36,7 @@ $files = [ordered]@{
     'Scripts\Hooks\ILARTS-hook.lua' = $hookSrc
     'Mods\tech\ILARTS\README.txt'   = Join-Path $PSScriptRoot 'README.txt'
 }
-# The console interface (WebView2 page) next to ILARTS.exe; without it the viewer shows the classic sidebar.
+# The console interface (WebView2 page) next to ILARTS.exe; without it the viewer says to reinstall and exits.
 $ui = Join-Path $root 'ui'
 foreach ($f in @('index.html', 'ilarts-console.js', 'fonts\fonts.css', 'fonts\saira-variable.woff2', 'fonts\ibm-plex-mono-400.woff2',
                  'fonts\ibm-plex-mono-500.woff2', 'fonts\ibm-plex-mono-600.woff2', 'fonts\OFL-Saira.txt', 'fonts\OFL-IBMPlexMono.txt')) {
@@ -45,7 +47,16 @@ $files["$bin\LICENSE-WebView2.txt"] = Join-Path $root 'third_party\webview2\LICE
 $files["$bin\LICENSE-Spout2.txt"] = Join-Path $root 'third_party\spout\LICENSE.txt'
 # The user guide (docs\guide\build-guide.ps1 makes it).
 $files['Mods\tech\ILARTS\DCS-ILARTS-Guide.pdf'] = Join-Path $root 'docs\DCS-ILARTS-Guide.pdf'
-foreach ($src in $files.Values) { if (-not (Test-Path $src)) { throw "missing: $src (build Release first)" } }
+# The benchmark mission (SETTINGS > Benchmark): into Saved Games\DCS\Missions.
+$files['Missions\ILARTS Benchmark.miz'] = Join-Path $PSScriptRoot 'Missions\ILARTS Benchmark.miz'
+foreach ($src in $files.Values) { if (-not (Test-Path -LiteralPath $src)) { throw "missing: $src (build Release first)" } }
+# The binaries carry their version (CMake's DCS_ILARTS_VERSION, src/version.rc): it must be the one being packaged.
+foreach ($b in @('ILARTS.dll', 'ILARTS.exe', 'ILARTSCam.dll')) {
+    $have = (Get-Item (Join-Path $rel $b)).VersionInfo.ProductVersion
+    if ($have -ne $Version) {
+        throw "build\Release\$b is version '$have', not $Version. Build it with: cmake -S . -B build -A x64 `"-DDCS_ILARTS_VERSION=$Version`" (quoted in PowerShell), then cmake --build build --config Release"
+    }
+}
 
 $hook = [System.IO.File]::ReadAllText($hookSrc)
 $mustBe = [ordered]@{
@@ -67,7 +78,7 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 foreach ($dst in $files.Keys) {
     $to = Join-Path $stage $dst
     New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
-    Copy-Item -Force $files[$dst] $to
+    Copy-Item -Force -LiteralPath $files[$dst] -Destination $to
 }
 $head = [System.IO.File]::ReadAllBytes($hookSrc)[0..2]
 if ($head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) { throw 'the hook starts with a UTF-8 BOM, which DCS''s Lua 5.1 rejects' }

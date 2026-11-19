@@ -13,6 +13,9 @@ __pycache__/
 # regenerate the hooked copy with tools/make_bwtv.py)
 deploy/shaders/original/
 
+# Claude Code worktrees (one per orchestrated task)
+.claude/worktrees/
+
 # Local viewer settings / editor state
 lso_viewer.ini
 ILARTS.ini

@@ -158,7 +158,113 @@ class Jpeg {
     IWICImagingFactory* f_ = nullptr;
 };
 
+// A recording's path that writes no file (the benchmark): the same encoder and MP4 writer, into NullStream.
+constexpr wchar_t kNullSink[] = L"|null";
+
+// A byte stream that keeps nothing: writes only move the position (the MP4 writer seeks back to patch sizes; reads
+// give zeros). The benchmark records into it, so encoding costs what it does for a file and nothing reaches the disk.
+class NullStream : public IMFByteStream {
+  public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IMFByteStream)) {
+            *ppv = static_cast<IMFByteStream*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG r = InterlockedDecrement(&ref_);
+        if (!r) delete this;
+        return r;
+    }
+    STDMETHODIMP GetCapabilities(DWORD* c) override {
+        *c = MFBYTESTREAM_IS_READABLE | MFBYTESTREAM_IS_WRITABLE | MFBYTESTREAM_IS_SEEKABLE;
+        return S_OK;
+    }
+    STDMETHODIMP GetLength(QWORD* n) override { return *n = len_, S_OK; }
+    STDMETHODIMP SetLength(QWORD n) override { return len_ = n, S_OK; }
+    STDMETHODIMP GetCurrentPosition(QWORD* p) override { return *p = pos_, S_OK; }
+    STDMETHODIMP SetCurrentPosition(QWORD p) override { return pos_ = p, S_OK; }
+    STDMETHODIMP IsEndOfStream(BOOL* e) override { return *e = pos_ >= len_, S_OK; }
+    STDMETHODIMP Read(BYTE* b, ULONG n, ULONG* got) override {
+        const ULONG k = pos_ >= len_ ? 0 : static_cast<ULONG>(std::min<QWORD>(n, len_ - pos_));
+        memset(b, 0, k);
+        pos_ += k;
+        if (got) *got = k;
+        return S_OK;
+    }
+    STDMETHODIMP BeginRead(BYTE* b, ULONG n, IMFAsyncCallback* cb, IUnknown* st) override {
+        ULONG got = 0;
+        Read(b, n, &got);
+        return Complete(got, cb, st);
+    }
+    STDMETHODIMP EndRead(IMFAsyncResult* r, ULONG* n) override { return End(r, n); }
+    STDMETHODIMP Write(const BYTE*, ULONG n, ULONG* done) override {
+        pos_ += n;
+        len_ = std::max(len_, pos_);
+        written_ += n;
+        if (done) *done = n;
+        return S_OK;
+    }
+    STDMETHODIMP BeginWrite(const BYTE* b, ULONG n, IMFAsyncCallback* cb, IUnknown* st) override {
+        ULONG done = 0;
+        Write(b, n, &done);
+        return Complete(done, cb, st);
+    }
+    STDMETHODIMP EndWrite(IMFAsyncResult* r, ULONG* n) override { return End(r, n); }
+    STDMETHODIMP Seek(MFBYTESTREAM_SEEK_ORIGIN o, LONGLONG off, DWORD, QWORD* now) override {
+        pos_ = o == msoBegin ? static_cast<QWORD>(off) : static_cast<QWORD>(static_cast<LONGLONG>(pos_) + off);
+        if (now) *now = pos_;
+        return S_OK;
+    }
+    STDMETHODIMP Flush() override { return S_OK; }
+    STDMETHODIMP Close() override { return S_OK; }
+    unsigned long long written() const { return written_; }
+
+  private:
+    // An asynchronous call done at once: the byte count travels in the result's state object.
+    struct Count : IUnknown {
+        ULONG n;
+        LONG ref = 1;
+        explicit Count(ULONG k) : n(k) {}
+        STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+            if (riid == __uuidof(IUnknown)) return *ppv = this, AddRef(), S_OK;
+            return *ppv = nullptr, E_NOINTERFACE;
+        }
+        STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref); }
+        STDMETHODIMP_(ULONG) Release() override {
+            const ULONG r = InterlockedDecrement(&ref);
+            if (!r) delete this;
+            return r;
+        }
+    };
+    HRESULT Complete(ULONG n, IMFAsyncCallback* cb, IUnknown* st) {
+        Count* c = new Count(n);
+        IMFAsyncResult* r = nullptr;
+        HRESULT hr = MFCreateAsyncResult(c, cb, st, &r);
+        c->Release();
+        if (SUCCEEDED(hr)) hr = MFInvokeCallback(r);
+        if (r) r->Release();
+        return hr;
+    }
+    static HRESULT End(IMFAsyncResult* r, ULONG* n) {
+        IUnknown* o = nullptr;
+        HRESULT hr = r->GetObject(&o);
+        if (SUCCEEDED(hr) && n) *n = static_cast<Count*>(o)->n;
+        if (o) o->Release();
+        return SUCCEEDED(hr) ? r->GetStatus() : hr;
+    }
+    LONG ref_ = 1;
+    QWORD pos_ = 0, len_ = 0;
+    unsigned long long written_ = 0;
+};
+
 // H.264 MP4 file (Media Foundation sink writer), NV12 frames in. MFStartup must have been called.
+// path kNullSink: into a NullStream (no file).
 class Mp4 {
   public:
     ~Mp4() { abandon(); }
@@ -202,12 +308,16 @@ class Mp4 {
         if (!w_) return false;
         const HRESULT hr = frames_ ? w_->Finalize() : E_FAIL;
         Release(w_);
+        if (null_) bytes_ = null_->written();
+        Release(null_);
         return SUCCEEDED(hr);
     }
+    unsigned long long nullBytes() const { return bytes_; }  // what a kNullSink recording would have written
 
   private:
     void abandon() {
         Release(w_);
+        Release(null_);
         frames_ = 0;
     }
     bool tryOpen(const std::wstring& path, bool hw, int fps, int bitrate) {
@@ -218,7 +328,9 @@ class Mp4 {
         if (SUCCEEDED(hr)) hr = attr->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, hw ? TRUE : FALSE);
         if (SUCCEEDED(hr)) hr = attr->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
         if (SUCCEEDED(hr)) hr = attr->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4);
-        if (SUCCEEDED(hr)) hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, attr, &w_);
+        const bool toNull = path == kNullSink;
+        if (toNull) null_ = new NullStream();
+        if (SUCCEEDED(hr)) hr = MFCreateSinkWriterFromURL(toNull ? L"null.mp4" : path.c_str(), null_, attr, &w_);
         auto common = [&](IMFMediaType* t) {
             HRESULT r = t->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
             if (SUCCEEDED(r)) r = t->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
@@ -258,12 +370,15 @@ class Mp4 {
         Release(attr);
         if (FAILED(hr)) {
             Release(w_);
-            DeleteFileW(path.c_str());
+            Release(null_);
+            if (!toNull) DeleteFileW(path.c_str());
         }
         frames_ = 0;
         return SUCCEEDED(hr);
     }
     IMFSinkWriter* w_ = nullptr;
+    NullStream* null_ = nullptr;
+    unsigned long long bytes_ = 0;
     DWORD stream_ = 0;
     int width_ = 0, height_ = 0;
     long frames_ = 0;
@@ -496,6 +611,10 @@ class Engine {
     void finish(Mp4& rec, const std::wstring& path, const std::wstring& finalPath, int key) {
         const long frames = rec.frames();
         const bool ok = rec.close();
+        if (path == kNullSink) {  // nothing on disk: say what was encoded
+            event(Event::Discarded, path, std::to_wstring(frames) + L" frames, " + std::to_wstring(rec.nullBytes()) + L" bytes", key);
+            return;
+        }
         if (finalPath == L"-" || !ok || frames == 0) {
             DeleteFileW(path.c_str());
             event(ok || frames == 0 ? Event::Discarded : Event::Failed, path, ok || frames == 0 ? L"" : L"could not finish the file", key);

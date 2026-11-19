@@ -1,5 +1,5 @@
 ; DCS ILARTS - Windows installer (Inno Setup 6). Built by deploy\package.ps1, which passes
-;   /DVersion=1.0.26 /DStage=<the staged Saved Games tree> /DOutDir=<dist>
+;   /DVersion=1.0.27 /DStage=<the staged Saved Games tree> /DOutDir=<dist>
 ; Installs into DCS's Saved Games folder (per user, no administrator rights) the same files the mod-manager zips
 ; carry, then runs "ILARTS.exe --repair" (hook, autoexec.cfg permissions, old hook removed). The virtual camera
 ; component is optional (Windows 11; asks for administrator rights for that step only). Running the installer
@@ -35,6 +35,7 @@ OutputBaseFilename=DCS-ILARTS-Setup-{#Version}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\ILARTS-light.ico
 UninstallDisplayName=DCS ILARTS
 UninstallDisplayIcon={#Bin}\ILARTS.exe
 CloseApplications=yes

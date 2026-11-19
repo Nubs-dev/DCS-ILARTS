@@ -26,6 +26,8 @@ long ShareReadCameraControl(unsigned* mask);                        // viewer's 
 // The viewer's joystick for extra camera i: rates -1..1 (0 when stale) and the reset count; false = no header.
 bool ShareReadPtz(int i, float* pan, float* tilt, float* zoom, long* resetSeq, int* pictureType);
 void ShareWritePtzState(int i, float panDeg, float tiltDeg, float zoom, bool manual);
+// Header::camPose[i] (v9): what camera i shows (view or camera name) and its rest pose, from the hook's 'set'.
+void ShareSetCameraPose(int i, const char* name, const double* pos, const double* look, double fovDeg);
 void ShareSetMishap(const char* text);                              // Header::mishap (seq + 1)
 std::string ShareRetarget(int slot, const char* name);              // share another render target through a slot
 long long ShareFrameCount();                                        // DCS frames seen by the render callback

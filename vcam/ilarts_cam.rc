@@ -1,0 +1,5 @@
+// ILARTSCam.dll resources: the version (src/version.rc).
+#define ILARTS_FILE_DESC "DCS ILARTS virtual cameras"
+#define ILARTS_FILE_NAME "ILARTSCam.dll"
+#define ILARTS_FILE_TYPE VFT_DLL
+#include "../src/version.rc"

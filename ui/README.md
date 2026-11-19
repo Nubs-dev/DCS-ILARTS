@@ -75,19 +75,21 @@ All fields are optional. Missing objects show as empty or off.
 | `windowButtons` | bool | `false` hides minimise, maximise and close (web hosts). |
 | `nativeLook` | bool | `true`: the host renders the adjustments and the CCTV look itself, so there are no CSS stand-ins. |
 | `settings` | bool | `false` makes SETTINGS FILE unavailable. |
+| `guide` | bool | `false` hides the title bar's ? key (the user guide). |
+| `bench` | object or `null` | The title bar's benchmark lamp, shown only with a state: `state` (`'armed'`, `'running'`, `'complete'`, `'error'`) and `tip` (its tooltip). |
 | `knobs` | `{exp, bri, con, gam}` | Each `{min, max, step, log}` overrides a knob's range. `log: true` gives a logarithmic sweep. The defaults are those of the hand-off spec. |
 | `layout` | string | The monitor wall: `'1'` (monitor A), `'2'` (A and B, each with its own channel strip) or `'q'` (A and four previews). Default `'q'`. |
-| `monitors[]` | array | Monitor A (the program: recorded on the main channel, streamed, replayed) and monitor B. Each: `id` (the source shown), `name`, `plate`, `res`, `signal`, `rec` (the VTR records this source). Burn-ins: `burnIns` (false hides time, ship and name), `time`, `ship`, `burnName`. `message` replaces "NO SIGNAL" and may span lines. `crosshair` applies to web hosts only. `picture` (or `null`: the source has no levels, like LSO 2): `group` (whose levels the knobs set; monitors showing the same group share them), `auto`, `autoRange`, `exp`, `bri`, `con`, `gam`, `unavailable` `{auto, reset, exp, bri, con, gam}`; for web hosts `adj` (false: no CSS stand-in), `cctv`, `str` (0-200). `ptz` (or `null`: not a PTZ camera): `id`, `name`, `live`, `manual` (under the joystick), `armed` (AUTO on), `auto` (armed and not under the joystick: the AUTO lamp), `target` and `targets` (`[[id, label]]`: what AUTO follows), `pan`, `tilt` (degrees off the rest view), `zoom` (factor). `views` (a camera with positions to choose from, e.g. the deck camera): the names, and `view`, the index chosen. |
+| `monitors[]` | array | Monitor A (the program: recorded on the main channel, streamed, replayed) and monitor B. Each: `id` (the source shown), `name`, `plate`, `res`, `signal`, `rec` (the VTR records this source). Burn-ins: `burnIns` (false hides time, ship and name), `time`, `ship`, `burnName`. `message` replaces "NO SIGNAL" and may span lines. `crosshair` applies to web hosts only. `picture` (or `null`: the source has no levels, like LSO 2): `group` (whose levels the knobs set; monitors showing the same group share them), `auto`, `autoRange`, `exp`, `bri`, `con`, `gam`, `unavailable` `{auto, reset, exp, bri, con, gam}`; for web hosts `adj` (false: no CSS stand-in), `cctv`, `str` (0-200). `ptz` (or `null`: not a PTZ camera): `id`, `name`, `live`, `manual` (under the joystick), `track` (false: the camera follows nothing, as on a hangar deck position: no AUTO or TARGET key), `armed` (AUTO on), `auto` (armed and not under the joystick: the AUTO lamp), `target` and `targets` (`[[id, label]]`: what AUTO follows), `pan`, `tilt` (degrees off the rest view), `zoom` (factor); `tune` (only with the host's camera tuning on: the TUNE key and its panel): `name` (the camera's or position's entry name), `known` (false: values not known yet, keys off), `tuned` (the host has an entry for it: RESET on), `pos`, `look` (`[x, y, z]`, m), `fov` (deg), `step` and `steps` (m), `alert` (a write that failed). `views` (a camera with positions to choose from, e.g. the deck camera): the names, `hangar` (the indices of the positions on the hangar deck: the lists show them under HANGAR DECK, the others under FLIGHT DECK) and `view`, the index chosen; with them `cycle` (the monitor's deck cycle, its CYCLE key): `on`, `seconds` (the interval) and `sel` (the indices into `views` it steps through). |
 | `program`, `picture` | object | Older hosts: without `monitors`, monitor A is made of these (the `monitors[]` fields, `picture` apart). |
 | `previews` | array | Layout 1 + 4: the four previews' source ids (`''` = none). Each preview has a source selector; clicking its picture swaps it with monitor A. Without it, the previews show the sources not on A. |
-| `sources[]` | array | `id`, `name` (button), `key`, `plate` (engraved label), `signal`, `selected` (program tally), `rec` (its REC switch: the VTR records it), `fps`. `group` (e.g. `'deck'`): the sources of a group share one source key and one REC key (`id` = the group); a monitor showing one of them steps through them with its view selector (`monitors[].views`). |
-| `ships[]` | array | `id`, `unit`, `hull`, `on`. |
-| `presets[]` | array | `name`, `key`, `saved`, `active` (every picture it holds looks as it says). A preset holds the levels of every picture: the PLAT and each camera. |
+| `sources[]` | array | `id`, `name` (button), `key`, `plate` (engraved label), `signal`, `selected` (program tally), `rec` (its REC switch: the VTR records it), `fps`. `group` (e.g. `'deck'`; a deck position also has `hangar`, true on the hangar deck): the sources of a group share one source key and one REC key (`id` = the group); a monitor showing one of them steps through them with its view selector (`monitors[].views`). |
+| `ships[]` | array | `id`, `unit`, `hull`, `name` (the ship's name, e.g. `'ROOSEVELT'`; shown under the hull, else `unit`), `on`. |
+| `presets[]` | array | `name`, `key`, `saved`, `fixed` (cannot be saved, renamed or cleared), `active` (every picture it holds looks as it says). A preset holds the levels of every picture: the PLAT and each camera. |
 | `cameras[]` | array | `id`, `name`, `on` (its power rocker). `live`: green LED. `starting`: blinking amber. |
-| `settingsForm` | object | Present while the settings dialog is open. `rev` (re-read the values when it changes), `file`, `message`, `restart` (show RESTART NOW). `sections[]` has `title` and `fields[]`. Each field has `key` (`section.key`), `label`, `type` (`text`, `password`, `number`, `bool`, `select`, `path`), `value`, `min`, `max`, `step`, `unit`, `hint`, `restart`, and for `select` `options` (`[[value, label]]`). |
-| `vtr` | object | `ok` (false: no recorder), `counter`, `line1`, `line2`, `mode` (`'auto'` or `'manual'`), `rec`, `play`, `replayTime`, `canSave`, `folder` (false: FOLDER unavailable). |
+| `settingsForm` | object | Present while the settings dialog is open. `rev` (re-read the values when it changes), `file`, `message`, `restart` (show RESTART NOW). `sections[]` has `title`, `tip` (optional: an **i** beside the panel's name with this tooltip) and `fields[]`. Each field has `key` (`section.key`), `label`, `type` (`text`, `password`, `number`, `bool`, `select`, `path`), `value`, `min`, `max` (for `text`: its longest), `step`, `unit`, `hint`, `restart`, `default` (a stream target's fields: what CLEAR sets), and for `select` `options` (`[[value, label]]`). |
+| `vtr` | object | `ok` (false: no recorder), `counter`, `line1`, `line2`, `mode` (`'auto'` or `'manual'`), `autoFilter` (whose approaches AUTO records: `'own'`, `'section'`, `'flight'` or `'all'`; absent: no ACFT key), `noAcft` (true: the player has flown no aircraft this mission, so only `'all'` records), `composite` (COMP: recordings and stills are one composite picture of the REC sources), `rec`, `play`, `replayTime`, `speed` (e.g. `'1/2x'`), `canSave`, `folder` (false: FOLDER unavailable), `folderInfo` (the recordings folder, e.g. `'12 CAPTURES · 3.4 GB'`; absent: not shown). |
 | `bb` | object | `on`, `text`, `alert` (amber text). |
-| `stream` | object | `on` (any stream). `state`: `'off'`, `'connecting'`, `'live'` or `'retrying'`, over all streams on. `text`: the status while on, a line per stream. `targets[]`: per stream `set` (has a server) and `state`. |
+| `stream` | object | `on` (any stream). `state`: `'off'`, `'connecting'`, `'live'` or `'retrying'`, over all streams on. `text`: the status while on, a line per stream. `targets[]`: per stream `set` (has a server), `state` and `label` (up to 6 characters, shown on its key instead of the number). |
 
 The element keeps only the settings dialog's unsaved edits. Each monitor's joystick drives the camera that monitor shows.
 
@@ -99,6 +101,7 @@ The `command` event's `detail` is one of these:
 |---|---|
 | `{cmd:'source', id, mon}` | A source key on a monitor's strip (`mon` 0 = A, 1 = B); `id` may be a group (`'deck'`: the host picks the position). |
 | `{cmd:'view', mon, dir}`, `{cmd:'view', mon, index}` | Monitor `mon`'s deck position: ◀ / ▶ (`dir` −1 / 1; skips those other monitors show) or picked from the list. |
+| `{cmd:'cycle', mon, on}`, `{cmd:'cycle', mon, sel}`, `{cmd:'cycle', mon, seconds}` | Monitor `mon`'s deck cycle: CYCLE on / off; the positions ticked in its pop-up (`sel`: indices into `views`, comma-separated, e.g. `'0,3,5'`); the interval (2 to 3600 s). |
 | `{cmd:'preview', slot, id}` | A preview's source (`''` = none). |
 | `{cmd:'previewTake', slot}` | A preview's picture is clicked: its source goes to monitor A, A's to the preview. |
 | `{cmd:'wall', mode}` | A MONITORS key: `mode` is `'1'`, `'2'` or `'q'`. |
@@ -110,17 +113,23 @@ The `command` event's `detail` is one of these:
 | `{cmd:'ptzRest', cam}` | REST: back to the rest view, automatic tracking off. |
 | `{cmd:'ptzAuto', cam}` | AUTO: back to the rest view, then follow the target. |
 | `{cmd:'ptzTarget', cam, target}` | What AUTO follows (an id of `ptz.targets`). |
-| `{cmd:'knob', key, value, mon}` | A knob on monitor `mon`'s strip is dragged or scrolled (`key`: `exp`, `bri`, `con`, `gam`). |
+| `{cmd:'tune', cam, field, axis, dir}` | Camera tuning: `field` `pos`, `look` (axis 0-2, by one step) or `fov` (by one degree), `dir` −1 / 1. |
+| `{cmd:'tuneStep', index}` | Camera tuning: the step, an index into `tune.steps`. |
+| `{cmd:'tuneReset', cam}`, `{cmd:'tuneCopy', cam}` | Camera tuning: RESET (drop the entry), COPY (its Lua line to the clipboard). |
+| `{cmd:'knob', key, value, mon}` | A knob on monitor `mon`'s strip is dragged, scrolled, or double-clicked (back to its default: exposure and brightness 0, contrast and gamma 1) (`key`: `exp`, `bri`, `con`, `gam`). |
 | `{cmd:'auto', mon}`, `{cmd:'reset', mon}` | AUTO or RESET on monitor `mon`'s strip. |
 | `{cmd:'preset', index, save}` | A preset is clicked; `save` is true with Ctrl or Shift held. |
-| `{cmd:'presetMenu', index, x, y}` | A preset is right-clicked. |
-| `{cmd:'mode', auto}`, `'rec'`, `'play'`, `'stop'`, `'save'`, `'folder'` | A VTR button is pressed. The REPLAY preview sends `play`. |
+| `{cmd:'rename', index, name}`, `{cmd:'presetClear', index}` | The preset's right-click menu (it also saves, with `{cmd:'preset', index, save: true}`). `name` empty: the preset's number. |
+| `{cmd:'keys', page}` | A pop-up or dialog opened (`page` true) or closed: while one is open the page keeps the keyboard. |
+| `{cmd:'autoFilter', value}` | The ACFT key: `value` is the next of `'own'`, `'section'`, `'flight'`, `'all'`. |
+| `{cmd:'mode', auto}`, `'comp'`, `'rec'`, `'play'`, `'stop'`, `'save'`, `'folder'` | A VTR button is pressed. The REPLAY preview sends `play`. |
 | `{cmd:'bb'}`, `'bbSave'`, `{cmd:'stream', on}`, `{cmd:'stream', n, on}` | Black box and stream rockers (every stream with a server), one stream (n 0-3), and SAVE. |
 | `{cmd:'settings'}`, `'settingsClose'`, `{cmd:'settingsSave', values}`, `{cmd:'settingsAction', id, key}` | The settings dialog. `values` maps each field key to its value. `id` is `browse` (with `key`), `openFile`, `export`, `import` or `restart`. |
 | `{cmd:'win', what}`, `{cmd:'drag'}` | Title bar: `what` is `min`, `max` or `close`. |
+| `{cmd:'guide'}`, `{cmd:'benchLamp'}` | Title bar: the ? key; the benchmark lamp clicked after a run (complete or error). Armed or running, the lamp opens the settings dialog at the Benchmark panel instead (`{cmd:'settings'}`). |
 | `{cmd:'layout', rects, dpr}` | `native-video` only: the screens' rectangles (`[x, y, w, h]` in CSS pixels of the viewport), plus `titlebar` and `winbtns`. |
 
-The desktop bridge (`index.html`) adds three messages:
+The desktop bridge (`index.html`) adds these messages:
 
 - page to application: `{cmd:'ready'}` and `{cmd:'key', vk}`;
-- application to page: `{ask:'rename', index, name}` and `{field:{key, value}}` (passed to `el.setSettingsField`).
+- application to page: `{field:{key, value}}` (passed to `el.setSettingsField`).

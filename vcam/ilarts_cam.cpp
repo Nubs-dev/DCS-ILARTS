@@ -7,7 +7,7 @@
 // media source (IMFMediaSourceEx, IMFGetService, IKsControl) with one video stream (IMFMediaStream2, IKsControl).
 // Every RequestSample delivers one frame, paced to the frame rate.
 //
-// Registration (admin): DllRegisterServer writes HKLM\SOFTWARE\Classes\CLSID\{...}\InprocServer32 for the six
+// Registration (admin): DllRegisterServer writes HKLM\SOFTWARE\Classes\CLSID\{...}\InprocServer32 for the seven
 // classes; the viewer's --install-cameras copies this DLL to Program Files first (Frame Server cannot read a user's
 // folders).
 #include <initguid.h>
@@ -405,25 +405,35 @@ class Stream : public IMFMediaStream2, public IKsControl {
             now = MFGetSystemTime();
         }
         next_ = (next_ && now - next_ < step) ? next_ + step : now + step;
-        // the viewer's picture
-        bool have = false;
-        int sw = 0, sh = 0;
+        // the viewer's picture; a copy the viewer wrote over meanwhile is tried again, then the last one is repeated
+        bool fresh = false;
         if (shared_.b || shared_.open(cam_)) {
             ilcam::Block* b = shared_.b;
             InterlockedExchange(&b->askW, static_cast<LONG>(w));
             InterlockedExchange(&b->askH, static_cast<LONG>(hgt));
             InterlockedExchange64(&b->readTick, static_cast<LONG64>(GetTickCount64()));
-            const LONG s0 = b->seq;
-            MemoryBarrier();
-            sw = b->frameW, sh = b->frameH;
-            const bool fresh = GetTickCount64() - static_cast<ULONGLONG>(b->writeTick) < 2000;
-            if (!(s0 & 1) && fresh && sw > 0 && sh > 0 && sw <= ilcam::kMaxW && sh <= ilcam::kMaxH) {
-                pic_.resize(static_cast<size_t>(sw) * sh * 4);
-                memcpy(pic_.data(), reinterpret_cast<const uint8_t*>(b + 1), pic_.size());
+            fresh = GetTickCount64() - static_cast<ULONGLONG>(b->writeTick) < 2000;
+            for (int attempt = 0; fresh && attempt < 3; ++attempt) {
+                const LONG s0 = b->seq;
                 MemoryBarrier();
-                have = b->seq == s0;  // not rewritten meanwhile
+                const int sw = b->frameW, sh = b->frameH;
+                if (s0 & 1) {  // being written: a full picture takes a few ms
+                    Sleep(2);
+                    continue;
+                }
+                if (sw <= 0 || sh <= 0 || sw > ilcam::kMaxW || sh > ilcam::kMaxH) break;
+                tmp_.resize(static_cast<size_t>(sw) * sh * 4);
+                memcpy(tmp_.data(), reinterpret_cast<const uint8_t*>(b + 1), tmp_.size());
+                MemoryBarrier();
+                if (b->seq == s0) {  // not rewritten meanwhile
+                    pic_.swap(tmp_);
+                    picW_ = sw, picH_ = sh;
+                    break;
+                }
             }
         }
+        const bool have = fresh && picW_ > 0;
+        const int sw = picW_, sh = picH_;
         const DWORD bytes = rgb ? w * hgt * 4 : w * hgt * 3 / 2;
         IMFMediaBuffer* buf = nullptr;
         IMFSample* s = nullptr;
@@ -457,7 +467,8 @@ class Stream : public IMFMediaStream2, public IKsControl {
     IMFMediaEventQueue* queue_ = nullptr;
     IMFStreamDescriptor* sd_ = nullptr;
     Shared shared_;
-    std::vector<uint8_t> pic_;
+    std::vector<uint8_t> pic_, tmp_;  // the last whole picture; the one being copied
+    int picW_ = 0, picH_ = 0;
     LONGLONG next_ = 0;
 };
 
@@ -742,8 +753,9 @@ class Activate : public IMFActivate {
     STDMETHODIMP CopyAllItems(IMFAttributes* d) override { return a_->CopyAllItems(d); }
 
   private:
+    // Released, not shut down: Frame Server activates the source, keeps it and lets this object go; only
+    // ShutdownObject ends the source.
     ~Activate() {
-        if (source_) source_->Shutdown();
         SafeRelease(source_);
         SafeRelease(a_);
         --g_objects;

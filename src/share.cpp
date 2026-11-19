@@ -787,12 +787,21 @@ void ShareSetSymbology(const char* text) {
         else if (k == "st_acBA") str(h->station.acBA, sizeof(h->station.acBA));
         else if (k == "st_htr") h->station.htrFt = static_cast<float>(atof(v.c_str()));
         else if (k == "st_htd") h->station.htdFt = static_cast<float>(atof(v.c_str()));
+        else if (k == "own_aircraft") h->ownAircraft = static_cast<uint32_t>(atoi(v.c_str()));  // v8: 1 in an aircraft, 2 none
         else if (k == "pass_epoch") h->passEpoch = static_cast<uint32_t>(strtoul(v.c_str(), nullptr, 10));
+        else if (k == "mission_name") {  // UTF-8: cut at a character boundary
+            size_t n = std::min(v.size(), sizeof(h->missionName) - 1);
+            if (n < v.size())
+                while (n > 0 && (static_cast<unsigned char>(v[n]) & 0xC0) == 0x80) --n;
+            memcpy(h->missionName, v.data(), n);
+            h->missionName[n] = 0;
+        }
         else if (k == "passes") {  // comes before the passN lines
             memset(h->passes, 0, sizeof(h->passes));
+            memset(h->passFlags, 0, sizeof(h->passFlags));
             h->passCount = std::min<uint32_t>(static_cast<uint32_t>(atoi(v.c_str())), _countof(h->passes));
         } else if (k.size() == 5 && k.rfind("pass", 0) == 0 && k[4] >= '1' && k[4] <= '4') {
-            // "id|active|result|range|type|board|pilot|carrier"
+            // "id|active|result|range|type|board|pilot|carrier[|case|callsign|grade|wire[|flags]]"
             auto& ps = h->passes[k[4] - '1'];
             std::vector<std::string> f;
             size_t s0 = 0, bar;
@@ -801,6 +810,7 @@ void ShareSetSymbology(const char* text) {
                 s0 = bar + 1;
             }
             f.push_back(v.substr(s0));
+            if (f.size() >= 13) h->passFlags[k[4] - '1'] = static_cast<uint32_t>(atoi(f[12].c_str()));  // v8: whose pass
             if (f.size() >= 12) {  // v4: case | callsign | grade | wire
                 ps.caseNo = atoi(f[8].c_str());
                 strncpy_s(ps.callsign, f[9].c_str(), _TRUNCATE);
@@ -926,8 +936,13 @@ void ShareSetCameraViews(int i, int current, const char* names) {
     for (const char* p = names; *p && n < static_cast<uint32_t>(lsoshare::kMaxViews);) {
         const char* e = strchr(p, '|');
         const size_t len = e ? static_cast<size_t>(e - p) : strlen(p);
+        // "NAME\tH": flags after a tab - 'H' = a hangar position, kept in the name's last byte (share_protocol.h)
+        const char* tab = static_cast<const char*>(memchr(p, '\t', len));
+        const size_t nameLen = tab ? static_cast<size_t>(tab - p) : len;
+        const bool hangar = tab && memchr(tab, 'H', len - nameLen) != nullptr;
         memset(v.names[n], 0, sizeof(v.names[n]));
-        memcpy(v.names[n], p, std::min(len, sizeof(v.names[n]) - 1));
+        memcpy(v.names[n], p, std::min(nameLen, sizeof(v.names[n]) - 2));
+        if (hangar) v.names[n][sizeof(v.names[n]) - 1] = lsoshare::kViewHangar;
         ++n;
         p = e ? e + 1 : p + len;
     }
@@ -971,6 +986,27 @@ void ShareWritePtzState(int i, float panDeg, float tiltDeg, float zoom, bool man
     auto& s = h->ptzState[i];
     s.panDeg = panDeg, s.tiltDeg = tiltDeg, s.zoom = zoom;
     s.manual = manual ? 1 : 0;
+}
+
+// v9: camera i's pose (the hook's 'set'), written only when it changed (seq + 1 after).
+void ShareSetCameraPose(int i, const char* name, const double* pos, const double* look, double fovDeg) {
+    lsoshare::Header* h = g.header;
+    if (!h || i < 0 || i >= lsoshare::kMaxCameras || !name) return;
+    lsoshare::Header::CameraPose p = {};
+    strncpy_s(p.name, name, _TRUNCATE);
+    for (int k = 0; k < 3; ++k) p.pos[k] = static_cast<float>(pos[k]), p.look[k] = static_cast<float>(look[k]);
+    p.fovDeg = static_cast<float>(fovDeg);
+    auto& d = h->camPose[i];
+    if (d.valid && !memcmp(d.name, p.name, sizeof(p.name)) && !memcmp(d.pos, p.pos, sizeof(p.pos)) && !memcmp(d.look, p.look, sizeof(p.look)) &&
+        d.fovDeg == p.fovDeg)
+        return;
+    memcpy(d.name, p.name, sizeof(p.name));
+    memcpy(d.pos, p.pos, sizeof(p.pos));
+    memcpy(d.look, p.look, sizeof(p.look));
+    d.fovDeg = p.fovDeg;
+    MemoryBarrier();
+    d.valid = 1;
+    InterlockedIncrement(&d.seq);
 }
 
 void ShareSetMishap(const char* text) {

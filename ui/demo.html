@@ -9,7 +9,8 @@
 <body>
 <!-- A web host in miniature: stand-in pictures instead of streams, and a state object kept here.
      Query parameters: ?native shows the desktop arrangement (screens cut open) over a test pattern; ?fit sizes
-     the console to the window; ?layout=1|2|q picks the monitor layout; ?flir shows the experimental FLIR key (on for the island camera); ?a=<source>&b=<source> what monitors A
+     the console to the window; ?layout=1|2|q picks the monitor layout; ?flir shows the experimental FLIR key (on for the island camera); ?acft=own|section|flight|all
+     the VTR's ACFT setting, ?noacft no aircraft flown (NO ACFT); ?a=<source>&b=<source> what monitors A
      and B show. -->
 <ilarts-console id="c"></ilarts-console>
 <script>
@@ -32,8 +33,9 @@ const S = {
   levels: { 'PLAT · LSO 1': { exp: 0.9, bri: 0.13, con: 1.5, gam: 1.2, auto: true }, ISLAND: { exp: -0.2, bri: 0, con: 1, gam: 1, auto: false },
             'BOW BUBBLE': { exp: 0, bri: 0, con: 1, gam: 1, auto: false } },
   ships: { 'Naval-1-1': true, 'Naval-2-1': false }, cams: { island: true, bow_bubble: true }, arm: { plat: true, island: true },
-  mode: 'auto', rec: false, play: false, bb: true, streams: ['off', 'off', 'off', 'off'], preset: 0, flir: { island: Q.has('flir') },
+  mode: 'auto', comp: false, acft: Q.get('acft') || 'all', rec: false, play: false, bb: true, streams: (Q.get('streams') || 'off,off,off,off').split(','), preset: 0, flir: { island: Q.has('flir') },
 };
+const PRE = [{ name: 'Night', saved: true }, { name: '', saved: true }, { name: '', saved: false }, { name: '', saved: false }];
 const live = id => !(id in S.cams) || S.cams[id];
 const src = id => SRC.find(x => x[0] === id) || SRC[0];
 function monitor(u) {
@@ -48,19 +50,28 @@ function monitor(u) {
     ptz: ptz ? { id, name: name.slice(0, 3), live: live(id), manual: false, pan: 0, tilt: 0, zoom: 1, flirAvail: Q.has('flir'), flir: !!S.flir[id] } : null,
   };
 }
+// ?streams=live,retrying,connecting,off: each target's state (a retrying one: no server); ?labels=TWITCH,,YT: their labels
+const LABELS = (Q.get('labels') || '').split(',');
+function streamState() {
+  const on = S.streams.map((x, n) => [x, n]).filter(([x]) => x !== 'off');
+  const state = !on.length ? 'off' : on.some(([x]) => x === 'retrying') ? 'retrying' : on.every(([x]) => x === 'live') ? 'live' : 'connecting';
+  const msg = { live: 'LIVE', connecting: 'CONNECTING', retrying: 'NO SERVER' };
+  const why = { live: 'live, 2.5 Mbit/s', connecting: 'connecting', retrying: 'cannot connect to live.example.net:1935' };
+  return { on: on.length > 0, state, text: on.map(([x, n]) => `Stream ${n + 1}: ${why[x]}`).join('\n'),
+           targets: S.streams.map((x, n) => ({ set: n < 3, state: x, ...(LABELS[n] ? { label: LABELS[n] } : {}), ...(x === 'off' ? {} : { msg: msg[x] }), ...(x === 'live' ? { rate: 2.5 } : {}) })) };
+}
 function push() {
   el.state = {
     status: src(S.mon[0])[1] + ' · 768×768 · 60 FPS', layout: S.layout,
     monitors: [monitor(0), monitor(1)],
     sources: SRC.map(([id, name, key, plate]) => ({ id, name, key, plate, signal: live(id), selected: id === S.mon[0], rec: !!S.arm[id], fps: live(id) ? 60 : 0 })),
-    ships: [{ id: 'Naval-1-1', unit: 'NAVAL-1-1', hull: 'CVN-72', on: S.ships['Naval-1-1'] }, { id: 'Naval-2-1', unit: 'NAVAL-2-1', hull: 'CVN-71', on: S.ships['Naval-2-1'] }],
-    presets: [{ name: 'Night', key: 'F5', saved: true, active: S.preset === 0 }, { name: '1', key: 'F6', saved: true, active: S.preset === 1 },
-              { name: '2', key: 'F7', saved: false }, { name: '3', key: 'F8', saved: false }],
+    ships: [{ id: 'Naval-1-1', unit: 'NAVAL-1-1', hull: 'CVN-72', name: 'LINCOLN', on: S.ships['Naval-1-1'] }, { id: 'Naval-2-1', unit: 'NAVAL-2-1', hull: 'CVN-71', name: 'ROOSEVELT', on: S.ships['Naval-2-1'] }],
+    presets: PRE.map((p, i) => ({ name: p.name || String(i), key: 'F' + (5 + i), saved: p.saved, fixed: i === 0, active: S.preset === i })),
     cameras: [{ id: 'island', name: 'Island', on: S.cams.island, live: S.cams.island }, { id: 'bow_bubble', name: 'Bow bubble', on: S.cams.bow_bubble, live: S.cams.bow_bubble }],
-    vtr: { counter: S.play ? '00:00:07' : S.rec ? '00:01:12' : '00:00:00', mode: S.mode, rec: S.rec, play: S.play, replayTime: '−00:38', canSave: S.play,
+    vtr: { counter: S.play ? '00:00:07' : S.rec ? '00:01:12' : '00:00:00', mode: S.mode, composite: S.comp, autoFilter: S.acft, noAcft: Q.has('noacft'), rec: S.rec, play: S.play, replayTime: '−00:38', speed: '1x', canSave: S.play, canStill: true,
            line1: S.play ? 'REPLAY · LAST PASS · −00:38' : S.rec ? 'RECORDING · ' + src(S.mon[0])[1] : S.mode === 'auto' ? 'AUTO · WAITING FOR AN APPROACH' : 'MANUAL · STANDBY',
-           line2: 'BUFFER · KEEPS THE LAST 45 S' },
-    bb: { on: S.bb, text: S.bb ? 'KEEPS THE LAST 5 MIN · 4:59 · 95 MB' : 'BLACK BOX OFF' }, stream: { on: S.streams.some(x => x !== 'off'), state: S.streams.some(x => x !== 'off') ? 'live' : 'off', text: S.streams.map((x, n) => x === 'off' ? '' : `${n + 1} · 2.5 MBIT/S`).filter(Boolean).join('\n'), targets: S.streams.map((x, n) => ({ set: n < 3, state: x })) },
+           line2: 'BUFFER · KEEPS THE LAST 45 S', folderInfo: '12 CAPTURES · 3.4 GB' },
+    bb: { on: S.bb, text: S.bb ? 'KEEPS THE LAST 5 MIN · 4:59 · 95 MB' : 'BLACK BOX OFF' }, stream: streamState(),
   };
 }
 el.addEventListener('command', e => {
@@ -75,8 +86,12 @@ el.addEventListener('command', e => {
   else if (c.cmd === 'knob' && group) S.levels[group][c.key] = c.value;
   else if (c.cmd === 'auto' && group) S.levels[group].auto = !S.levels[group].auto;
   else if (c.cmd === 'reset' && group) Object.assign(S.levels[group], { exp: 0, bri: 0, con: 1, gam: 1 });
-  else if (c.cmd === 'preset') S.preset = c.index;
+  else if (c.cmd === 'preset') { if (c.save) PRE[c.index].saved = c.index > 0 || PRE[0].saved; else if (PRE[c.index].saved) S.preset = c.index; }
+  else if (c.cmd === 'rename' && c.index > 0) PRE[c.index].name = c.name;
+  else if (c.cmd === 'presetClear' && c.index > 0) PRE[c.index].saved = false;
   else if (c.cmd === 'mode') S.mode = c.auto ? 'auto' : 'manual';
+  else if (c.cmd === 'comp') S.comp = !S.comp;
+  else if (c.cmd === 'autoFilter') S.acft = c.value;
   else if (c.cmd === 'rec') { S.rec = !S.rec; S.play = false; }
   else if (c.cmd === 'play') S.play = !S.play;
   else if (c.cmd === 'stop') S.rec = S.play = false;

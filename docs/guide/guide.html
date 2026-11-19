@@ -17,6 +17,7 @@ html { -webkit-print-color-adjust: exact; print-color-adjust: exact; background:
 body { margin: 0; font: 10pt/1.45 'Segoe UI', system-ui, sans-serif; color: var(--ink); background: var(--bg); }
 h1, h2, h3 { color: #F2F5F7; }
 code { color: #A9D9A6; }
+a { color: inherit; text-decoration: none; }
 h1, h2, h3 { font-family: 'Saira', 'Segoe UI', sans-serif; letter-spacing: .02em; margin: 0; }
 h2 { font-size: 16pt; padding: 0 0 4pt; border-bottom: 2pt solid var(--ink); margin: 0 0 10pt; break-after: avoid; }
 h2 .n { color: var(--accent); margin-right: 8pt; }
@@ -25,7 +26,8 @@ p { margin: 0 0 7pt; }
 section { break-before: page; }
 section.flow { break-before: auto; margin-top: 18pt; }
 .mono, kbd, code { font-family: 'IBM Plex Mono', Consolas, monospace; font-size: 8.8pt; }
-kbd { border: 1px solid #4A525A; border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; background: #2A2F35; color: #E8ECEF; white-space: nowrap; }
+/* keyboard keys: light keycaps, so they never look like the console's dark keys (.key) */
+kbd { border: 1px solid #9AA3AB; border-bottom: 2.5px solid #6E7881; border-radius: 4px; padding: 0 5px; background: #E4E8EB; color: #15181B; font-weight: 600; white-space: nowrap; }
 .key { font-family: 'IBM Plex Mono', monospace; font-size: 8.6pt; font-weight: 600; letter-spacing: .04em; background: var(--panel);
        border: 1px solid var(--line); border-radius: 2px; padding: 0 4px; white-space: nowrap; }
 ol.steps { margin: 0 0 8pt; padding-left: 20pt; }
@@ -53,9 +55,10 @@ figcaption { font-size: 8.4pt; color: var(--mute); margin-top: 3pt; }
 /* cover */
 .cover { height: 245mm; display: flex; flex-direction: column; }
 .cover .band { background: var(--dark); color: #E8ECEF; padding: 26pt 26pt 22pt; }
-.cover h1 { font-size: 40pt; letter-spacing: .06em; }
+.cover h1 { font-size: 40pt; letter-spacing: .06em; display: flex; align-items: center; gap: 14pt; }
+.cover h1 img.icon { width: 46pt; height: 46pt; }
 .cover .sub { font-family: 'IBM Plex Mono', monospace; font-size: 9pt; letter-spacing: .16em; color: #7FD67A; margin-top: 4pt; }
-.cover .what { font-size: 13pt; margin-top: 16pt; max-width: 120mm; color: #C9D0D6; }
+.cover h1 .doc { font-size: 18pt; letter-spacing: .04em; color: #C9D0D6; margin-left: 8pt; }
 .cover img { width: 100%; display: block; }
 .cover .meta { margin-top: auto; font-size: 8.6pt; color: var(--mute); border-top: 1px solid var(--line); padding-top: 8pt; }
 .toc { columns: 2; column-gap: 18pt; margin: 14pt 0 0; padding: 0; list-style: none; font-size: 10pt; }
@@ -68,11 +71,10 @@ figcaption { font-size: 8.4pt; color: var(--mute); margin-top: 3pt; }
 <!-- ------------------------------------------------------------------ cover -->
 <div class="cover">
   <div class="band">
-    <h1>DCS ILARTS</h1>
+    <h1><img class="icon" src="../../assets/ILARTS-icon-light-128.png" alt=""><span>DCS ILARTS <span class="doc">User Guide</span></span></h1>
     <div class="sub">INTEGRATED LAUNCH AND RECOVERY TELEVISION SURVEILLANCE</div>
-    <div class="what">User guide: the console, the controls and the settings.</div>
   </div>
-  <img src="../images/console.jpg" alt="">
+  <img src="../images/console-readme.jpg" alt="">
   <ul class="toc">
     <li><span>1</span>Introduction</li>
     <li><span>2</span>Installation and repair</li>
@@ -89,9 +91,9 @@ figcaption { font-size: 8.4pt; color: var(--mute); margin-top: 3pt; }
   DCS ILARTS is an independent community mod. Eagle Dynamics does not make, support or endorse it.
   DCS World and Supercarrier are trademarks of Eagle Dynamics SA.<br>
   Mod compatibility: DCS ILARTS was not tested with other mods.<br>
-  Downloads and problem reports: <code>github.com/Nubs-dev/DCS-ILARTS</code>. Videos: <code>youtube.com/channel/UCsvqdzJiNPpHHsO97z9y0KA</code>. DCS ILARTS is free. To say thank you, you can give a donation to the Pilot Mental Health Campaign: <code>www.pmhc.org</code>.<br>
-  AI disclosure: DCS ILARTS was made with the help of AI tools (Claude, by Anthropic). The author designed it, directed the work and did the tests in DCS.<br>
-  The pictures in this guide show the console with sample camera pictures.</div>
+  Downloads and problem reports: <code>github.com/Nubs-dev/DCS-ILARTS</code>. You can also report problems in the #ilarts-issues forum on <a href="https://discord.gg/qsjedwKHNr"><code>Discord</code></a>.
+  Videos: <code>youtube.com/@Nubs-dev</code>. DCS ILARTS is free. To say thank you, you can give a donation to the Pilot Mental Health Campaign: <code>www.pmhc.org</code>.<br>
+  AI disclosure: DCS ILARTS was made with the help of AI tools (Claude, by Anthropic). The author designed it, directed the work and did the tests in DCS.</div>
 </div>
 
 <!-- ------------------------------------------------------------------ 1 -->
@@ -106,13 +108,13 @@ from all locations in the mission. You do not need to go to the LSO platform.</p
 <tr><td class="c"><span class="key">LSO 1</span></td><td>The LSO station screen.</td></tr>
 <tr><td class="c"><span class="key">LSO 2</span></td><td>The LSO cue panel.</td></tr>
 <tr><td class="c"><span class="key">ISLAND</span></td><td>A camera on the island. In AUTO mode, it follows each landing aircraft from the round down.</td></tr>
-<tr><td class="c"><span class="key">DECK</span></td><td>The deck cameras: bow bubble, catapult 1, crotch, elevators 1 to 3, corral, waist bubble and junkyard.</td></tr>
+<tr><td class="c"><span class="key">DECK</span></td><td>The deck cameras: bow bubble, catapult 1, crotch, elevators 1 to 3, corral, waist bubble and junkyard. In the hangar bay: HANGAR FWD and HANGAR AFT at the ends, and HANGAR EL 1 to 4 across from each elevator. The hangar cameras have no AUTO.</td></tr>
 </table>
 <h3>Requirements</h3>
 <ul>
 <li>DCS World 2.9.31.29434 with the Supercarrier module.</li>
 <li>Windows 10 or Windows 11, 64-bit. The virtual cameras operate on Windows 11 only. (A virtual camera is a video source that OBS, Discord, Teams and Zoom can use as a webcam.)</li>
-<li>The Microsoft Edge WebView2 runtime. Windows 11 has it. Without it, ILARTS cannot open. It shows the download page.</li>
+<li>The Microsoft Edge WebView2 Runtime. The ILARTS window is built on it. Windows 11 and an up-to-date Windows 10 have it. Without it, ILARTS does not open. It shows a message and offers the download page, <code>developer.microsoft.com/microsoft-edge/webview2</code>. Install the "Evergreen Bootstrapper".</li>
 </ul>
 <h3>Mission types</h3>
 <table>
@@ -125,6 +127,11 @@ from all locations in the mission. You do not need to go to the LSO platform.</p
 ILARTS stops and shows "DCS version not compatible". DCS continues to operate correctly.</div>
 <div class="note"><b>NOTE</b>Each camera that shows on a monitor makes DCS draw the scene one more time.
 This decreases the DCS frame rate. A camera stops when no monitor shows it.</div>
+<h3>Privacy</h3>
+<p>ILARTS collects no data. It has no telemetry and no account. ILARTS keeps all of its files on your computer: the recordings, the stills, the settings and the log.
+ILARTS connects to a network only for an RTMP stream that you set up, to the server that you enter. Future versions can include an optional automatic check for updates.</p>
+<p>The log (<code>%LOCALAPPDATA%\ILARTS\ILARTS.log</code>) can show your Windows user name in file paths. It goes to other persons only if you attach it to a problem report.
+The ILARTS window uses the Microsoft WebView2 runtime. The runtime follows your Windows diagnostic data settings.</p>
 </section>
 
 <!-- ------------------------------------------------------------------ 2 -->
@@ -156,6 +163,7 @@ If DCS or a different mod does not operate correctly after you install ILARTS, r
 <li>In OvGME, enable the mod.</li>
 <li>Do the procedure "Add the hook permissions" below.</li>
 </ol>
+<div class="note"><b>NOTE</b>The OvGME and JSGME installation is not tested. If you use it, give feedback and report problems in the #ilarts-issues forum on <a href="https://discord.gg/qsjedwKHNr"><code>Discord</code></a>.</div>
 <p>To install without a mod manager, copy the <code>Mods</code> and <code>Scripts</code> folders from the zip into <code>Saved Games\DCS</code>.</p>
 <div class="caution"><b>CAUTION</b>After you install from a zip (OMM, OvGME or manually), you must do the procedure "Add the hook permissions".
 If you do not do it, ILARTS does not operate in single player or when you are the host.</div>
@@ -173,9 +181,9 @@ It keeps the permissions of other mods. Before the first change, it saves a copy
 <ol class="steps">
 <li>Start DCS.</li>
 <li>Load a mission with a Supercarrier.</li>
-<li>Wait approximately 10 seconds. The ILARTS window opens automatically.</li>
+<li>The ILARTS window opens automatically.</li>
 </ol>
-<div class="note"><b>NOTE</b>ILARTS does not start when DCS starts. It starts approximately 10 seconds after the mission is loaded.</div>
+<div class="note"><b>NOTE</b>ILARTS does not start when DCS starts. It starts when the mission is loaded. The pictures come approximately 20 seconds later.</div>
 <p>You can also start ILARTS before DCS. The window then shows "NO SIGNAL" until the mission starts.</p>
 <p>To stop the automatic start, set <span class="key">SETTINGS</span> &gt; Window &gt; Start with DCS to off.
 Then start ILARTS yourself from the Start menu or from <code>ILARTS.exe</code>.</p>
@@ -208,7 +216,7 @@ It installs the camera component again if it is missing. It also shows if your D
 <h2><span class="n">3</span>The console</h2>
 <p>The console has the layout of the ILARTS station on the ship. It has monitors, a row of controls under each monitor, and a rack of shared controls.</p>
 <figure class="shot">
-  <img src="../images/console.jpg" alt="The console in layout 2">
+  <img src="../images/console-readme.jpg" alt="The console in layout 2">
   <span class="pin" style="left:90%;top:2.2%">1</span>
   <span class="pin" style="left:25%;top:40%">2</span>
   <span class="pin" style="left:74.7%;top:40%">3</span>
@@ -225,8 +233,8 @@ It installs the camera component again if it is missing. It also shows if your D
 </figure>
 <table>
 <thead><tr><th>#</th><th>Component</th><th>Function</th></tr></thead>
-<tr><td>1</td><td>Title bar</td><td>Shows the program source and its frame rate. <span class="key">SETTINGS</span> opens the settings. Drag the title bar to move the window.</td></tr>
-<tr><td>2</td><td>Monitor A</td><td>The program monitor. Replay, the black box and stream source "Monitor A" use this picture.</td></tr>
+<tr><td>1</td><td>Title bar</td><td>Shows the program source and its frame rate. <span class="key">?</span> opens this guide. <span class="key">SETTINGS</span> opens the settings. Only while there is a benchmark, a lamp shows its state (refer to "Benchmark"). Drag the title bar to move the window.</td></tr>
+<tr><td>2</td><td>Monitor A</td><td>The program monitor. The black box and stream source "Monitor A" use this picture.</td></tr>
 <tr><td>3</td><td>Monitor B</td><td>A second monitor with its own controls. It shows in layout 2 only.</td></tr>
 <tr><td>4</td><td>SOURCE</td><td>Selects the picture on the monitor. Refer to section 4.</td></tr>
 <tr><td>5</td><td>LEVELS</td><td>Adjusts exposure, brightness, contrast and gamma of the picture.</td></tr>
@@ -254,6 +262,7 @@ Drag an edge of the window to change its size.</p>
 <li>A red lamp shows a recording or a live stream. A lamp that flashes shows a connection in progress.</li>
 <li>A small letter in the corner of a key shows its keyboard shortcut.</li>
 <li>For a knob, drag up or down. Alternatively, turn the mouse wheel above the knob.</li>
+<li>To set one knob back to its default, double-click it. RESET sets all four back.</li>
 </ul>
 </section>
 
@@ -264,10 +273,12 @@ Drag an edge of the window to change its size.</p>
 <h3>SOURCE</h3>
 <ul>
 <li>Click a source key to show that source on the monitor. On monitor A, the keyboard keys <kbd>1</kbd> to <kbd>5</kbd> do the same.</li>
-<li><span class="key">DECK</span> shows a deck camera. The arrows under the source keys go to the next deck position that no other monitor shows. Click the position name to see the list.</li>
-<li><span class="key">REC</span> sets the source for recording. When REC is on, each recording makes one file for this source.</li>
+<li>Click the lit source key again to set the monitor off. The monitor shows NO SOURCE. Click a source key to set it on again.</li>
+<li><span class="key">DECK</span> shows a deck camera. The arrows under the source keys go to the next deck position that no other monitor shows. Click the position name to see the list. The list shows the positions in two groups, FLIGHT DECK and HANGAR DECK. So do the CYCLE list and the source lists of the 1 + 4 previews.</li>
+<li><span class="key">CYCLE</span> steps the monitor through deck positions, one every few seconds, while it shows a deck camera. Click <span class="key">▾</span> next to it to tick the positions and set the interval (2 to 3600 seconds). Click FLIGHT DECK or HANGAR DECK to tick or untick all the positions in that group. Positions that another monitor shows are skipped. Choosing a position yourself starts the interval again from there. Holding the PTZ joystick holds the cycle on that position. The cycle pauses during an instant replay. Each monitor keeps its own cycle.</li>
+<li><span class="key">REC</span> sets the source for recording. When REC is on, each recording makes one file for this source, shown on a monitor or not. For DECK, that is each deck position on a monitor, or the last one shown when none is.</li>
 </ul>
-<div class="note"><b>NOTE</b>A maximum of five deck positions can show at the same time.</div>
+<div class="note"><b>NOTE</b>A maximum of five deck positions can show at the same time. CYCLE starts the next position before it lets go of the current one, so a step needs a free one of the five. When all five are in use, the monitor changes position in place.</div>
 <h3>LEVELS</h3>
 <table>
 <thead><tr><th>Control</th><th>Function</th></tr></thead>
@@ -292,6 +303,7 @@ Drag an edge of the window to change its size.</p>
 <p>With the target "recovery", the camera follows each landing aircraft from the round down. It stops when the aircraft taxis out of the wires.
 With a catapult target, it follows the aircraft on the catapult through the launch.</p>
 <div class="note"><b>NOTE</b>When you move the joystick, AUTO stops. Push AUTO or REST to cancel the manual control.</div>
+<p>The hangar cameras do not follow aircraft. Their PTZ panel has no AUTO and no TARGET: a hangar camera stays where you put it.</p>
 <div class="caution"><b>CAUTION</b>A camera in FLIR decreases the DCS frame rate much more than a camera in the normal picture.
 Use FLIR on one camera at a time. Each camera starts in the normal picture when ILARTS starts.</div>
 </section>
@@ -303,14 +315,14 @@ Use FLIR on one camera at a time. Each camera starts in the normal picture when 
 <h3>MONITORS</h3>
 <p>Selects the layout: <span class="key">1</span>, <span class="key">2</span> or <span class="key">1 + 4</span>. <span class="key">A ⇄ B</span> moves the pictures between monitors A and B. Refer to section 3.</p>
 <h3>SHIP</h3>
-<p>Selects the carrier that all monitors show. Click the arrows to go to the next or the previous carrier.
+<p>Selects the carrier that all monitors show. The display shows the hull number and the ship's name. Click the arrows to go to the next or the previous carrier.
 Alternatively, push <kbd>N</kbd> or <kbd>Shift</kbd>+<kbd>N</kbd>. Click the name to see the list of carriers.</p>
 <h3>PRESETS</h3>
 <p>A preset keeps the levels of all pictures: the PLAT and each camera. <span class="key">NIGHT</span> is a fixed preset. Presets 1 to 3 are yours.</p>
 <ol class="steps">
 <li>Adjust the levels of the pictures.</li>
 <li>Right-click a preset key.</li>
-<li>Click "Save the current look to …".</li>
+<li>Click "Save".</li>
 </ol>
 <p>To load a preset, click its key or push <kbd>F5</kbd> to <kbd>F8</kbd>. To save, you can also push <kbd>Ctrl</kbd>+<kbd>F6</kbd> to <kbd>F8</kbd>.
 The right-click menu also has "Rename" and "Clear".</p>
@@ -318,25 +330,47 @@ The right-click menu also has "Rename" and "Clear".</p>
 <table>
 <thead><tr><th>Control</th><th>Function</th></tr></thead>
 <tr><td class="c"><span class="key">MAN</span> / <span class="key">AUTO</span></td><td>MAN: you start and stop the recordings. AUTO: ILARTS records each approach automatically.</td></tr>
+<tr><td class="c"><span class="key">ACFT</span></td><td>Selects the approaches that AUTO records: MY ACFT, MY SECTION, MY FLIGHT or ALL ACFT. The display above the MAN, AUTO and ACFT keys shows the selection. Refer to section 6.</td></tr>
 <tr><td class="c"><span class="key">● REC</span></td><td>Starts or stops a recording.</td></tr>
 <tr><td class="c"><span class="key">▶ PLAY</span></td><td>Starts the instant replay.</td></tr>
 <tr><td class="c"><span class="key">■ STOP</span></td><td>Stops the recording or the replay.</td></tr>
-<tr><td class="c"><span class="key">SAVE</span></td><td>Saves the replay as a video file.</td></tr>
-<tr><td class="c"><span class="key">FOLDER</span></td><td>Opens the folder of the video files.</td></tr>
+<tr><td class="c"><span class="key">SAVE</span></td><td>Saves the replay as video files, one for each monitor.</td></tr>
+<tr><td class="c"><span class="key">STILL</span></td><td>Saves a picture of each source in REC SRC. Refer to section 6.</td></tr>
+<tr><td class="c"><span class="key">FOLDER</span></td><td>Opens the folder of the current mission. If the mission has no files yet, it opens the video folder.</td></tr>
 <tr><td class="c">REC SRC</td><td>Shows the sources that each recording records. Click a key to add or remove a source.</td></tr>
+<tr><td class="c"><span class="key">COMP</span></td><td>Lit: each recording and each still is one composite picture of the sources in REC SRC. Not lit: one file for each source. Refer to section 6.</td></tr>
 </table>
-<p>The display shows the mode, the time and the replay buffer.</p>
+<p>The display shows the mode, the time and the replay buffer. The small display shows the number of files in the video folder and their size.</p>
 <h3>BLACK BOX</h3>
 <p>The switch sets the black box on or off. <span class="key">SAVE</span> saves all that the black box keeps. Refer to section 6.</p>
 <h3>STREAM</h3>
-<p>The switch starts all streams that have a server. Keys <span class="key">1</span> to <span class="key">4</span> start or stop one stream.
+<p>The switch starts all streams that have a server. Each of the four keys under the display starts or stops one stream.
 A red lamp shows a live stream. A lamp that flashes shows that the stream connects. Refer to section 7.</p>
+<p>The display shows the stream status on the first line: OFF, CONNECTING, LIVE or RETRYING.
+With more than one stream, it also shows the number of live streams, for example LIVE 2/2.
+The second line shows the bit rate. If a stream is not live, the second line shows the stream number and the cause, for example 2 NO SERVER.
+Put the pointer on the display to see the full message for each stream.</p>
 </section>
 
 <!-- ------------------------------------------------------------------ 6 -->
 <section>
 <h2><span class="n">6</span>Recording, replay and black box</h2>
 <p>ILARTS saves the video files in <code>Videos\DCS ILARTS</code>. You can change the folder in the settings.</p>
+<p>Each mission gets its own folder in the video folder. The folder name contains the date, the time that the mission started and the mission name.
+An example: <code>2026-11-17 1432 Case I recovery</code>. All recordings, black box files, saved replays and stills of the mission go in this folder.
+When you start the mission again, ILARTS makes a new folder. ILARTS makes the folder only when the mission has a file.</p>
+<h3>Storage limit</h3>
+<p>The storage limit keeps the video folder below a maximum size. It is off when you install ILARTS.</p>
+<ol class="steps">
+<li>Click <span class="key">SETTINGS</span>.</li>
+<li>In the Recording panel, set <b>Storage limit</b> on.</li>
+<li>Type the size in <b>Maximum size</b>, in GB.</li>
+<li>Click <span class="key">SAVE</span>.</li>
+</ol>
+<p>Before a new recording or still, ILARTS adds the size of all files in the video folder and its subfolders (and in the stills folder, if you set a different one).
+If the new file makes the total larger than the maximum size, ILARTS deletes its oldest recordings and stills first. Then it removes the mission folders that are empty.</p>
+<div class="note"><b>NOTE</b>ILARTS deletes only files that it made. It does not delete your other files, a file that it records at that time, or a file that is open in a different program.
+Files from older ILARTS versions are not deleted. If ILARTS cannot delete more, the status shows "Storage limit reached".</div>
 <h3>Record each approach automatically</h3>
 <ol class="steps">
 <li>On the VTR REMOTE, push <span class="key">AUTO</span>.</li>
@@ -344,12 +378,30 @@ A red lamp shows a live stream. A lamp that flashes shows that the stream connec
 </ol>
 <p>ILARTS starts each recording just before the aircraft comes into the PLAT picture. It stops a few seconds after the trap, the bolter or the wave-off.
 When aircraft are close together, ILARTS makes one file for each aircraft.</p>
+<p>To record only some approaches, push <span class="key">ACFT</span> until the display shows the selection:</p>
+<table>
+<thead><tr><th>Display</th><th>AUTO records the approaches of</th></tr></thead>
+<tr><td class="c">MY ACFT</td><td>Your aircraft.</td></tr>
+<tr><td class="c">MY SECTION</td><td>Your aircraft and the other aircraft of your section: aircraft 1 and 2, or 3 and 4, of your flight.</td></tr>
+<tr><td class="c">MY FLIGHT</td><td>All aircraft of your flight (your group in the mission).</td></tr>
+<tr><td class="c">ALL ACFT</td><td>All aircraft. This is the default.</td></tr>
+</table>
+<p>When you leave your aircraft, the selection continues to use it until the mission ends. For example, you land, then go to the LSO station or release your slot. ILARTS then records the approaches of your flight.</p>
+<div class="note"><b>NOTE</b>If you have not flown an aircraft in this mission (spectator, LSO or observer slot), only ALL ACFT records. The display then shows NO ACFT.
+The selection has no effect on manual recordings, the replay and the black box.</div>
 <p>The file name contains the date, the time, the pilot, the recovery case and the LSO grade.
 An example: <code>2026-11-13 21-04-10 Viper Case III (OK) wire 3 PLAT.mp4</code>. The source name is at the end.</p>
 <div class="note"><b>NOTE</b>The LSO grade is available for human pilots, in single player or when you are the host.
 The grade can come a few seconds after the file is saved. ILARTS then changes the file name.
 Without a grade, the name ends with TRAP, BOLTER or WAVE-OFF.</div>
 <p>A pass recording is approximately 1 minute and less than 20 MB. You can send it in Discord.</p>
+<h3>One file for all sources (COMP)</h3>
+<p>Push <span class="key">COMP</span> next to the REC SRC row. When it is lit, each recording, manual or automatic, is one 1920 × 1080 file that shows all the sources in REC SRC.
+The sources are arranged as in a composite stream: one source fills the picture, two are side by side, three or four are in a 2 × 2 grid.
+If more than four sources are in REC SRC, the composite shows the first four in the order of the REC SRC row.</p>
+<p>The file name ends with COMPOSITE, for example <code>2026-11-13 21-04-10 Viper Case III (OK) wire 3 COMPOSITE.mp4</code>.
+Push <span class="key">COMP</span> again to go back to one file for each source. A change applies from the next recording.</p>
+<div class="note"><b>NOTE</b>The instant replay and the black box do not change with COMP.</div>
 <h3>Record manually</h3>
 <ol class="steps">
 <li>On the VTR REMOTE, push <span class="key">MAN</span>.</li>
@@ -358,7 +410,7 @@ Without a grade, the name ends with TRAP, BOLTER or WAVE-OFF.</div>
 </ol>
 <h3>Instant replay</h3>
 <ol class="steps">
-<li>Push <span class="key">▶ PLAY</span> or <kbd>Space</kbd>. The replay shows the last approach, or the last 30 seconds if there was no approach.</li>
+<li>Push <span class="key">▶ PLAY</span> or <kbd>Space</kbd>. The replay shows the last approach, or the last 30 seconds if there was no approach. All monitors (A, B and the previews) play the replay together.</li>
 <li>Use the keys in the table below to control the replay.</li>
 <li>Push <kbd>Esc</kbd> to go back to the live picture.</li>
 </ol>
@@ -367,11 +419,17 @@ Without a grade, the name ends with TRAP, BOLTER or WAVE-OFF.</div>
 <tr><td class="c"><kbd>Space</kbd></td><td>Pause or play.</td></tr>
 <tr><td class="c"><kbd>←</kbd> <kbd>→</kbd></td><td>Go back or forward 2 seconds. When paused: one frame.</td></tr>
 <tr><td class="c"><kbd>,</kbd> <kbd>.</kbd></td><td>One frame back or forward.</td></tr>
-<tr><td class="c"><kbd>↑</kbd> <kbd>↓</kbd></td><td>Speed: full, 1/2, 1/4.</td></tr>
+<tr><td class="c"><kbd>↑</kbd> <kbd>↓</kbd></td><td>Speed: 1/8, 1/4, 1/2, 1, 2, 4 or 8 times. The speed shows on the monitor.</td></tr>
 <tr><td class="c"><kbd>Home</kbd></td><td>Go to the start of the replay.</td></tr>
-<tr><td class="c"><kbd>S</kbd></td><td>Save the replay as a video file.</td></tr>
+<tr><td class="c"><kbd>S</kbd></td><td>Save the replay as video files, one for each monitor.</td></tr>
 <tr><td class="c"><kbd>Esc</kbd></td><td>Go back to the live picture.</td></tr>
 </table>
+<h3>Stills</h3>
+<p>Push <span class="key">STILL</span> or <kbd>P</kbd>. ILARTS saves one picture of each source in the REC SRC row, as it records it.
+When <span class="key">COMP</span> is lit, ILARTS saves one composite picture of these sources.
+The pictures go in the folder <code>Stills</code> in the folder of the mission. You can change the folder in the settings. All stills then go in that folder, without a folder for each mission.</p>
+<p>The file name contains the date, the time, the source and the mission clock in DCS (as on the PLAT picture).
+An example: <code>ILARTS 2026-11-16 14-03-22 PLAT DCS 09-30-12.png</code>.</p>
 <h3>Black box</h3>
 <p>The black box keeps the last 5 minutes of the program picture in memory. It is on when ILARTS starts.</p>
 <p>ILARTS saves the black box automatically when one of these events occurs within 5 nm of the carrier:</p>
@@ -389,16 +447,18 @@ To save all that the black box keeps at a different time, push <span class="key"
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F9</kbd></td><td>Start or stop a recording.</td></tr>
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F10</kbd></td><td>Instant replay.</td></tr>
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F11</kbd></td><td>Save the black box.</td></tr>
+<tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F8</kbd></td><td>Save a still.</td></tr>
 </table>
 <h3>CCTV look</h3>
-<p>The CCTV look adds scan lines, noise, lens distortion and dark corners, as on the monitor of a ship. Push <kbd>C</kbd> to set it on or off.
+<p>The CCTV look adds scan lines, noise, lens distortion and dark corners, as on the monitor of a ship. It is on in a new installation. Push <kbd>C</kbd> to set it on or off.
 The setting "Apply to recordings only" keeps the window picture clean and puts the look in the recordings, the black box and the streams only.</p>
 </section>
 
 <!-- ------------------------------------------------------------------ 7 -->
 <section>
 <h2><span class="n">7</span>Streams, OBS and Discord</h2>
-<p>These outputs can use these sources: Monitor A, Monitor B, PLAT, LSO 1, LSO 2 and Island. Monitor A and Monitor B send the picture that the monitor shows.</p>
+<p>These outputs can use these sources: Monitor A, Monitor B, PLAT, LSO 1, LSO 2, Island and Composite. Monitor A and Monitor B send the picture that the monitor shows.
+Composite puts up to four pictures in one picture (refer to "Set up an RTMP stream" below).</p>
 <table>
 <thead><tr><th>Output</th><th>Use</th><th>Condition</th></tr></thead>
 <tr><td>Spout</td><td>OBS and other Spout receivers. No delay and no encoding.</td><td>Install the "Spout2 Plugin for OBS" in OBS.</td></tr>
@@ -415,6 +475,7 @@ The setting "Apply to recordings only" keeps the window picture clean and puts t
 <li>In OBS, add a "Spout2 Capture" source.</li>
 <li>Select the sender, for example "ILARTS PLAT".</li>
 </ol>
+<p>If you select Composite, select its pictures at Composite in the Outputs panel. The Spout composite is 1920 × 1080.</p>
 <h3>Use a picture as a webcam (Windows 11)</h3>
 <ol class="steps">
 <li>In ILARTS, click <span class="key">SETTINGS</span>.</li>
@@ -425,17 +486,25 @@ The setting "Apply to recordings only" keeps the window picture clean and puts t
 <li>In Discord, Teams or Zoom, select the camera, for example "ILARTS PLAT".</li>
 </ol>
 <div class="note"><b>NOTE</b>ILARTS draws a virtual camera only when a program shows it. If the camera shows no picture, start ILARTS and load a mission.</div>
+<div class="note"><b>NOTE</b>If ILARTS shows "Reinstall the camera component", the component is from an older ILARTS version. Click <span class="key">INSTALL</span> again. ILARTS then restarts.</div>
 <h3>Set up an RTMP stream</h3>
 <ol class="steps">
 <li>Click <span class="key">SETTINGS</span>.</li>
-<li>In the STREAMS panel, click a stream key <span class="key">1</span> to <span class="key">4</span>.</li>
-<li>At Server, type the server address, for example <code>rtmp://live.twitch.tv/app</code>.</li>
+<li>In the STREAMS panel, click one of the four keys <span class="key">1</span> to <span class="key">4</span>.</li>
+<li>At Label, you can type a name of up to six characters, for example TWITCH. The key of this stream then shows this name instead of the number.</li>
+<li>At Server, type the server address, for example <code>rtmp://ingest.global-contribute.live-video.net/app</code> for Twitch.</li>
 <li>At Stream key, type the key from your stream service.</li>
 <li>At Source, select the source.</li>
 <li>If the source is Composite, select up to four pictures at Composite.</li>
 <li>Click <span class="key">SAVE</span>.</li>
-<li>On the rack, push the STREAM switch, or push the stream key.</li>
+<li>On the rack, push the STREAM switch, or push the key of the stream under the display.</li>
 </ol>
+<p>To remove a stream, select its key in the STREAMS panel, click <span class="key">CLEAR</span>, click <span class="key">CLEAR</span> again to confirm, then click <span class="key">SAVE</span>.</p>
+<p>To start the streams automatically, set SETTINGS &gt; Stream &gt; Start automatically to on.
+The streams then start when DCS is connected and a source shows a picture.
+If you stop the streams, they stay off until DCS starts again.</p>
+<div class="note"><b>NOTE</b>To do a test on Twitch without a live broadcast, add <code>?bandwidthtest=true</code> after the stream key.
+Twitch receives the stream but does not show it to viewers. Remove this text before you start a live broadcast.</div>
 <p>A composite puts up to four pictures in one 1920 × 1080 picture. One picture fills it. Two pictures are side by side. Three or four pictures are in a 2 × 2 grid.</p>
 <div class="caution"><b>CAUTION</b>Each stream with a source other than Monitor A is one more encoding on the graphics card and one more upload.
 A stream uses 2.5 Mbit/s. A composite uses 6 Mbit/s. Make sure that your connection has sufficient capacity.</div>
@@ -454,6 +523,7 @@ Push the new key. <kbd>Esc</kbd> cancels the change. <kbd>Delete</kbd> removes t
 <tr><td class="c"><kbd>M</kbd></td><td>VTR auto / manual</td></tr>
 <tr><td class="c"><kbd>Space</kbd></td><td>Instant replay</td></tr>
 <tr><td class="c"><kbd>B</kbd></td><td>Save the black box</td></tr>
+<tr><td class="c"><kbd>P</kbd></td><td>Still</td></tr>
 <tr><td class="c"><kbd>C</kbd></td><td>CCTV look</td></tr>
 <tr><td class="c"><kbd>A</kbd></td><td>Auto levels</td></tr>
 <tr><td class="c"><kbd>R</kbd></td><td>Reset levels</td></tr>
@@ -473,6 +543,7 @@ Push the new key. <kbd>Esc</kbd> cancels the change. <kbd>Delete</kbd> removes t
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F9</kbd></td><td>Record (in DCS)</td></tr>
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F10</kbd></td><td>Instant replay (in DCS)</td></tr>
 <tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F11</kbd></td><td>Save the black box (in DCS)</td></tr>
+<tr><td class="c"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F8</kbd></td><td>Still (in DCS)</td></tr>
 </table>
 </div>
 <p>The level keys operate on the picture of monitor A. The keys with "(in DCS)" also operate when DCS has the keyboard.</p>
@@ -492,7 +563,10 @@ ILARTS keeps the settings in the file <code>ILARTS.ini</code> next to <code>ILAR
 or operate incorrectly. These settings are off when you install ILARTS. Use them at your own risk.</div>
 <table>
 <thead><tr><th>Panel</th><th>Setting</th><th>Default</th><th>Range</th><th>Function</th></tr></thead>
-<tr><td rowspan="9">Recording</td><td>Folder</td><td>Videos\DCS ILARTS</td><td></td><td>Folder for recordings, replays and black box files.</td></tr>
+<tr><td rowspan="12">Recording</td><td>Folder</td><td>Videos\DCS ILARTS</td><td></td><td>Folder for recordings, replays, black box files and stills. Each mission gets a folder in it.</td></tr>
+<tr><td>Stills folder</td><td>Empty: Stills in the mission folder</td><td></td><td>Folder for all stills.</td></tr>
+<tr><td>Storage limit</td><td>Off</td><td></td><td>Deletes the oldest recordings and stills to keep the folder below the maximum size. Refer to section 6.</td></tr>
+<tr><td>Maximum size</td><td>50 GB</td><td>1–100000 GB</td><td>Maximum size of the video folder and its subfolders.</td></tr>
 <tr><td>File name</td><td class="mono">{date} {time} {callsign} Case {case} {grade}</td><td></td><td>Name of a pass recording. Click a parameter under the field to add it.</td></tr>
 <tr><td>Before the pass</td><td>3 s</td><td>0–20 s</td><td>Time recorded before the aircraft comes into the picture.</td></tr>
 <tr><td>After the pass</td><td>4 s</td><td>0–30 s</td><td>Time recorded after the trap, bolter or wave-off.</td></tr>
@@ -504,7 +578,7 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <tr><td rowspan="3">Replay</td><td>Replay buffer ↻</td><td>45 s</td><td>10–300 s</td><td>Time that the instant replay keeps.</td></tr>
 <tr><td>Without a pass</td><td>30 s</td><td>5–300 s</td><td>Replay length when no pass is in the buffer.</td></tr>
 <tr><td>Picture quality ↻</td><td>85 %</td><td>30–100 %</td><td>Quality of the replay buffer.</td></tr>
-<tr><td rowspan="7">CCTV look</td><td>CCTV look</td><td>Off</td><td></td><td>Sets the look on or off (key C).</td></tr>
+<tr><td rowspan="7">CCTV look</td><td>CCTV look</td><td>On</td><td></td><td>Sets the look on or off (key C).</td></tr>
 <tr><td>Strength</td><td>100 %</td><td>0–200 %</td><td>Strength of all effects.</td></tr>
 <tr><td>Apply to recordings only</td><td>Off</td><td></td><td>The look in recordings, black box and streams only.</td></tr>
 <tr><td>Noise</td><td>1 ×</td><td>0–4</td><td rowspan="4">Strength of each effect. 0 removes the effect.</td></tr>
@@ -514,18 +588,26 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <tr><td rowspan="3">Black box</td><td>Keeps</td><td>5 min</td><td>1–30 min</td><td>Time that the black box keeps.</td></tr>
 <tr><td>Before a mishap</td><td>60 s</td><td>5–1800 s</td><td>Time saved before a mishap.</td></tr>
 <tr><td>After a mishap</td><td>15 s</td><td>0–120 s</td><td>Time saved after a mishap.</td></tr>
-<tr><td rowspan="7">Streams</td><td>Bit rate ↻</td><td>2500 kbit/s</td><td>300–20000</td><td>Bit rate of each stream and of the black box.</td></tr>
+<tr><td rowspan="9">Streams</td><td>Start automatically</td><td>Off</td><td></td><td>Starts the streams when DCS is connected and a source shows a picture.</td></tr>
+<tr><td>Bit rate ↻</td><td>2500 kbit/s</td><td>300–20000</td><td>Bit rate of each stream and of the black box.</td></tr>
 <tr><td>Composite bit rate</td><td>6000 kbit/s</td><td>1000–30000</td><td>Bit rate of a composite stream (1920 × 1080).</td></tr>
 <tr><td>Silent audio track</td><td>On</td><td></td><td>Adds a silent audio track. Some services refuse video without audio.</td></tr>
-<tr><td>Server</td><td></td><td></td><td>Address of the RTMP server, for each stream 1 to 4.</td></tr>
+<tr><td>Label</td><td></td><td>6 characters</td><td>Name on the key of the stream instead of the number, for each stream 1 to 4.</td></tr>
+<tr><td>Server</td><td></td><td></td><td>Address of the RTMP server.</td></tr>
 <tr><td>Stream key</td><td></td><td></td><td>Key from the stream service.</td></tr>
 <tr><td>Source</td><td>Monitor A</td><td></td><td>Monitor A, Monitor B, Composite, PLAT, LSO 1, LSO 2 or Island.</td></tr>
 <tr><td>Composite</td><td>Monitor A, Monitor B</td><td>1–4</td><td>The pictures in a composite.</td></tr>
-<tr><td rowspan="3">Outputs</td><td>Spout</td><td>None</td><td></td><td>Sources sent as Spout senders.</td></tr>
+<tr><td rowspan="4">Outputs</td><td>Spout</td><td>None</td><td></td><td>Sources sent as Spout senders.</td></tr>
 <tr><td>Virtual cameras</td><td>None</td><td></td><td>Sources sent as webcams (Windows 11).</td></tr>
+<tr><td>Composite</td><td>Monitor A, Monitor B</td><td>1–4</td><td>The pictures in the Spout and webcam composite.</td></tr>
 <tr><td>Camera component</td><td></td><td></td><td>INSTALL or REMOVE the webcam component. Administrator approval is necessary.</td></tr>
-<tr><td rowspan="2">Installation</td><td>Check and repair</td><td></td><td></td><td>REPAIR: refer to section 2.</td></tr>
+<tr><td rowspan="3">Benchmark</td><td>Benchmark next mission</td><td>Off</td><td></td><td>Measures the frame rate cost of ILARTS at the next mission start. The setting goes off when the benchmark starts. Refer to "Benchmark" below.</td></tr>
+<tr><td>Last report</td><td></td><td></td><td>OPEN shows the newest benchmark report.</td></tr>
+<tr><td>Reports</td><td></td><td></td><td>OPEN shows the folder with the benchmark reports, <code>%LOCALAPPDATA%\ILARTS\benchmarks</code>.</td></tr>
+<tr><td rowspan="4">Installation</td><td>Version</td><td></td><td></td><td>The installed ILARTS version. Give it in a problem report.</td></tr>
+<tr><td>Check and repair</td><td></td><td></td><td>REPAIR: refer to section 2.</td></tr>
 <tr><td>DCS permissions</td><td></td><td></td><td>ADD or REMOVE the hook permissions in <code>autoexec.cfg</code>. Refer to section 2.</td></tr>
+<tr><td>Logs</td><td></td><td></td><td>OPEN shows the folder with the log file, <code>ILARTS.log</code>.</td></tr>
 <tr><td>Experimental</td><td>FLIR view ⚠</td><td>Off</td><td></td><td>Shows the FLIR key on the PTZ panel of each camera. Refer to section 4 and the caution below.</td></tr>
 <tr><td rowspan="2">Window</td><td>Start with DCS</td><td>On</td><td></td><td>Opens ILARTS when a mission starts, if it is not open.</td></tr>
 <tr><td>Anti-aliasing</td><td>On</td><td></td><td>Makes the edges in the camera pictures smooth.</td></tr>
@@ -547,6 +629,52 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <li><span class="key">EXPORT</span> saves a copy of the settings. Use it as a backup, or give it to a squadron member.</li>
 <li><span class="key">IMPORT</span> loads a settings file. ILARTS keeps the old file as <code>ILARTS.ini.bak</code> and restarts.</li>
 </ul>
+<h3>Benchmark</h3>
+<p>The benchmark measures how much DCS frame rate ILARTS uses on your computer. It operates one time, at the start of the next mission, for approximately 6 minutes. The <b>i</b> next to the name of the Benchmark panel shows these instructions in short form.</p>
+<ol>
+<li>Set SETTINGS &gt; Benchmark &gt; Benchmark next mission to on. Click <span class="key">SAVE</span>. The benchmark lamp in the title bar comes on (steady green).</li>
+<li>Load <code>Missions\ILARTS Benchmark.miz</code> (installed with ILARTS), a calm, repeatable scene: the cockpit of an F/A-18C parked on the deck of CVN-71. Do not fly.</li>
+<li>Keep DCS in front. Do not touch the controls, do not move the view and do not pause. The benchmark starts 10 seconds after the mission runs (not paused, you in your aircraft). The lamp flashes amber and the status display of ILARTS shows the stage, for example <span class="mono">BENCHMARK 4/12 · 1 VIEW + RECORDING</span>. ILARTS changes the cameras itself.</li>
+<li>When the lamp is steady green again, the report is ready. Click the lamp to open the report (or SETTINGS &gt; Benchmark &gt; Last report &gt; <span class="key">OPEN</span>).</li>
+<li>Compare each stage with stage 1, Hook only. Two runs have differences of a few percent.</li>
+</ol>
+<table>
+<thead><tr><th>Benchmark lamp</th><th>Meaning</th><th>Click</th></tr></thead>
+<tr><td>Off (not shown)</td><td>No benchmark.</td><td></td></tr>
+<tr><td>Steady green</td><td>Armed for the next mission.</td><td>Opens SETTINGS at the Benchmark panel.</td></tr>
+<tr><td>Flashing amber</td><td>The benchmark operates. The tooltip shows the stage.</td><td>Opens SETTINGS at the Benchmark panel.</td></tr>
+<tr><td>Steady green</td><td>Complete. The report is ready.</td><td>Opens the report. The lamp goes off.</td></tr>
+<tr><td>Red</td><td>The benchmark stopped. The tooltip shows why.</td><td>Opens the report of the stages that were complete, if there is one. The lamp goes off.</td></tr>
+</table>
+<table>
+<thead><tr><th>Stage</th><th>What operates</th></tr></thead>
+<tr><td>1 Hook only</td><td>DCS with the ILARTS hook. All other ILARTS functions are off.</td></tr>
+<tr><td>2 PLAT, LSO 1, LSO 2</td><td>ILARTS starts as usual, without cameras.</td></tr>
+<tr><td>3–12 1 view to 5 views</td><td>The island camera, then deck positions. Each quantity operates two times: with recording off, then with the PLAT and each view recorded. These recordings are not saved.</td></tr>
+</table>
+<p>Each stage operates for 20 seconds after a short time to become stable. For each stage, the report shows the average frame rate and the 1% and 0.1% lows (99% and 99.9% of the frames are faster). Below each value, the report shows the difference from stage 1, for example <span class="mono">−15 fps · +2.3 ms · −13%</span>. A mission does not stay the same, so a difference of a few percent can be noise.</p>
+<div class="note"><b>NOTE</b>If you pause DCS, the benchmark waits until DCS operates again. Frames from the pause are not measured. The benchmark stops when you leave the mission, change aircraft or slot, or close ILARTS. The report then shows the stages that were complete. After the benchmark, the cameras, monitors and REC switches are as before. ILARTS does not record passes while the benchmark operates.</div>
+<h3>Performance</h3>
+<p>DCS draws each picture that ILARTS shows. The PLAT and LSO screens are exports from DCS. Each island or deck camera makes DCS draw the scene one more time. This is almost all of the cost of ILARTS, on the graphics card and the render thread of DCS. ILARTS itself (the viewer, recording and the black box) uses a few percent of the processor.</p>
+<p>Benchmark results from two computers: the benchmark mission (F/A-18C parked on the deck). Average / 1% low.</p>
+<table>
+<thead><tr><th>Stage</th><th>Laptop: RTX 5070 Ti Laptop GPU, Core Ultra 9 275HX, DCS at 2560 × 1600</th><th>Desktop: RTX 5090, Ryzen 7 9800X3D, DCS at 9984 × 1744</th></tr></thead>
+<tr><td>Hook only</td><td>127 / 109 fps</td><td>104 / 80 fps</td></tr>
+<tr><td>PLAT, LSO 1, LSO 2</td><td>101 / 65 fps (−21% average)</td><td>86 / 59 fps (−17% average)</td></tr>
+<tr><td>1 view</td><td>82 / 60 fps (−36%)</td><td>80 / 57 fps (−23%)</td></tr>
+<tr><td>2 views</td><td>73 / 57 fps (−43%)</td><td>67 / 53 fps (−36%)</td></tr>
+<tr><td>3 views</td><td>62 / 49 fps (−52%)</td><td>49 / 40 fps (−52%)</td></tr>
+<tr><td>4 views</td><td>52 / 38 fps (−60%)</td><td>43 / 35 fps (−59%)</td></tr>
+<tr><td>5 views</td><td>51 / 39 fps (−60%)</td><td>43 / 36 fps (−58%)</td></tr>
+<tr><td>5 views, all recorded</td><td>49 / 35 fps (−61%)</td><td>37 / 30 fps (−64%)</td></tr>
+</table>
+<div class="note"><b>NOTE</b>The results above tell you roughly what to expect in terms of performance degradation up front. They are not a comparison of the two computers. The DCS graphics settings are considerably different on each and the desktop is also running a more intensive multi-monitor setup with three cockpit viewports and five exports of cockpit displays (MFD, RWR and IFEI).</div>
+<ul>
+<li>The PLAT, LSO and camera pictures have the largest cost. With the exports and three views, the frame rate of both computers was approximately half of the frame rate with the hook only.</li>
+<li>Recording has a smaller cost than a view: a maximum of 2 fps on the laptop, and 5 to 8 fps on the desktop with two or more views. The processor use of ILARTS increased from approximately 2% to 11% with six sources recorded.</li>
+<li>The lows decrease more than the average. If DCS is less smooth, look at the 1% low.</li>
+</ul>
+<div class="note"><b>NOTE</b>A camera operates only while something uses it: a monitor or a preview, recording, a stream, Spout or a virtual camera. To keep DCS fast, show only the cameras that you watch (layout 1, or previews set to none). Do the benchmark on your computer. Your settings, resolution and graphics card change the results.</div>
 </section>
 
 <!-- ------------------------------------------------------------------ 10 -->
@@ -554,19 +682,24 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <h2><span class="n">10</span>Problems</h2>
 <table>
 <thead><tr><th>Problem</th><th>Possible cause</th><th>Action</th></tr></thead>
-<tr><td>The window does not open when DCS starts.</td><td>This is correct. ILARTS starts only when a mission operates.</td><td>Load a mission. Wait approximately 10 seconds after the mission is loaded.</td></tr>
-<tr><td>The window does not open 10 seconds after the mission is loaded.</td><td>The hook or its permissions are missing.</td><td>Close DCS. Do a REPAIR (section 2).</td></tr>
+<tr><td>The window does not open when DCS starts.</td><td>This is correct. ILARTS starts only when a mission operates.</td><td>Load a mission.</td></tr>
+<tr><td>The window does not open when the mission is loaded.</td><td>The hook or its permissions are missing.</td><td>Close DCS. Do a REPAIR (section 2).</td></tr>
 <tr><td>At start, ILARTS shows "DCS ILARTS is not set up yet".</td><td>The hook permissions were not added after a zip installation.</td><td>Click YES. Then restart DCS.</td></tr>
 <tr><td>The window shows "DCS version not compatible".</td><td>DCS changed in an update.</td><td>Install a newer ILARTS version. Alternatively, go back to the compatible DCS version.</td></tr>
 <tr><td>The window shows NO SIGNAL.</td><td>No mission with a carrier operates.</td><td>Load a mission with a Supercarrier.</td></tr>
 <tr><td>As a multiplayer client, the PLAT shows no aircraft.</td><td>The server does not let clients export objects.</td><td>Ask the server administrator to let clients export objects.</td></tr>
-<tr><td>The DCS frame rate decreases.</td><td>Each camera on a monitor draws the scene again.</td><td>Show fewer cameras. Use layout 1.</td></tr>
+<tr><td>The DCS frame rate decreases.</td><td>Each camera on a monitor draws the scene again.</td><td>Show fewer cameras. Use layout 1. To see the cost of each function, do a benchmark (section 9).</td></tr>
 <tr><td>A virtual camera does not show in Discord.</td><td>The camera component is not installed.</td><td>Click SETTINGS &gt; Outputs &gt; INSTALL.</td></tr>
+<tr><td>ILARTS shows "Reinstall the camera component".</td><td>The component is from an older ILARTS version.</td><td>Click SETTINGS &gt; Outputs &gt; INSTALL. ILARTS restarts.</td></tr>
 <tr><td>A stream does not connect.</td><td>Incorrect server or key, or <code>rtmps://</code>.</td><td>Make sure that the server starts with <code>rtmp://</code>. Make sure that the key is correct.</td></tr>
+<tr><td>The STREAM display shows CLOSED.</td><td>The server stopped the connection. Twitch does this when the stream key is incorrect.</td><td>Copy the stream key from the stream service again.</td></tr>
+<tr><td>The STREAM display shows NO SERVER or NO HOST.</td><td>ILARTS cannot find or connect to the server.</td><td>Make sure that the server address is correct. Make sure that the computer has an internet connection.</td></tr>
 <tr><td>DCS or a different mod does not operate correctly after you install ILARTS.</td><td>A conflict between ILARTS and a different mod. ILARTS was not tested with other mods.</td><td>Disable the other mods one at a time to find the conflict. Send the log file to the mod author.</td></tr>
-<tr><td>At start, ILARTS shows "needs the Microsoft Edge WebView2 Runtime".</td><td>The WebView2 runtime is not installed.</td><td>Click YES. Install the runtime from the download page. Start ILARTS again.</td></tr>
+<tr><td>At start, ILARTS shows "can't run on this PC yet" and "needs the Microsoft Edge WebView2 Runtime".</td><td>The WebView2 runtime is not installed.</td><td>Click YES. Install the "Evergreen Bootstrapper" from the download page. Start ILARTS again.</td></tr>
+<tr><td>ILARTS shows "The console stopped working" and closes.</td><td>The WebView2 runtime stopped.</td><td>Start ILARTS again. If the problem continues, click YES and install the runtime again from the download page.</td></tr>
 </table>
-<p>If the problem continues, make a problem report at <code>github.com/Nubs-dev/DCS-ILARTS/issues</code>. Attach the log file: <code>%LOCALAPPDATA%\ILARTS\ILARTS.log</code>.
+<p>If the problem continues, make a problem report at <code>github.com/Nubs-dev/DCS-ILARTS/issues</code>.
+You can also report it in the #ilarts-issues forum on <a href="https://discord.gg/qsjedwKHNr"><code>Discord</code></a>. Give the ILARTS version (SETTINGS &gt; Installation &gt; Version) and attach the log file: <code>%LOCALAPPDATA%\ILARTS\ILARTS.log</code>. To find it, click SETTINGS &gt; Installation &gt; Logs &gt; <span class="key">OPEN</span>.
 The camera component has its own log: <code>%ProgramData%\DCS ILARTS\ILARTSCam.log</code>.</p>
 </section>
 

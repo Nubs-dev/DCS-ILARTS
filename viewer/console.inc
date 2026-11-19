@@ -16,8 +16,8 @@
 // window of its own for the mouse, so the window's mouse messages are passed to it (ConsoleMouse). Keys reach
 // the application three ways: the window's own WM_KEYDOWN (message loop), WebView2's accelerator keys (keys
 // with Ctrl / Alt, function keys, arrows, Esc) and the page, which passes on the rest ({cmd:'key'}).
-// Without WebView2 ILARTS says so and offers the download page; if WebView2 fails while running, ILARTS says so
-// and closes. (The classic sidebar is only for the development tests: --ui classic.)
+// The console is the only interface. Without WebView2 ILARTS says so and offers the download page; if WebView2
+// fails while running, ILARTS says so and closes.
 
 constexpr wchar_t kUiHost[] = L"ilarts.example";  // the ui folder, served to the WebView as https://ilarts.example/
 
@@ -91,6 +91,7 @@ std::wstring JsonEsc(const std::wstring& s) {
     std::wstring o;
     for (wchar_t c : s) {
         if (c == L'"' || c == L'\\') o += L'\\', o += c;
+        else if (c == L'\n') o += L"\\n";  // line breaks reach the page (tooltips, the monitors' messages)
         else if (c < 32) o += L' ';
         else o += c;
     }
@@ -124,6 +125,8 @@ std::wstring Upper(std::wstring t) {
     for (auto& c : t) c = static_cast<wchar_t>(towupper(c));
     return t;
 }
+
+#include "tuning.inc"  // the camera tuning panel (SETTINGS > Developer; development builds only)
 std::wstring Hms(double sec) {
     const int t = static_cast<int>(std::max(0.0, sec));
     wchar_t b[24];
@@ -136,7 +139,7 @@ std::wstring Hms(double sec) {
 // Every setting of ILARTS.ini that has no control on the desk, edited in the window. The page gets the table as
 // state.settingsForm while the dialog is open and sends back {cmd:'settingsSave', values:{'video.fps': 30 ...}}.
 // The file stays the store (and is there for backup and sharing: OPEN FILE, EXPORT, IMPORT).
-// type: text, password, number, percent (number shown x100), bool, select, path. restart = read at start only.
+// type: text, password, number, percent (number shown x100), bool, select, path. restart = read at start only. hi of a text field: its longest.
 struct SettingDef {
     const wchar_t *group, *section, *key, *label, *type, *def;
     double lo, hi, step;
@@ -144,7 +147,11 @@ struct SettingDef {
     bool restart;
 };
 const SettingDef kSettings[] = {
-    {L"Recording", L"video", L"folder", L"Folder", L"path", L"", 0, 0, 0, L"", L"", L"Recordings, replays and black box files", false},
+    {L"Recording", L"video", L"folder", L"Folder", L"path", L"", 0, 0, 0, L"", L"", L"Recordings, replays, black box files and stills, in a folder per mission", false},
+    {L"Recording", L"video", L"stills_folder", L"Stills folder", L"path", L"", 0, 0, 0, L"", L"", L"Empty: a Stills folder in each mission's folder", false},
+    {L"Recording", L"video", L"storage_limit", L"Storage limit", L"bool", L"0", 0, 0, 0, L"", L"",
+     L"Deletes the oldest recordings and stills ILARTS made when new ones would take the folder over the size below", false},
+    {L"Recording", L"video", L"storage_limit_gb", L"Maximum size", L"number", L"50", 1, 100000, 1, L"GB", L"", L"The recordings folder with its subfolders (and the stills folder)", false},
     // options of a text field: its parameters ("token|what it stands for"), listed under it to insert
     {L"Recording", L"video", L"filename", L"File name", L"text", L"{date} {time} {callsign} Case {case} {grade}", 0, 0, 0, L"",
      L"{date}|Date (YYYY-MM-DD);{time}|Time (HH-MM-SS);{callsign}|Callsign (else the pilot);{case}|Recovery case (I, II, III);"
@@ -161,7 +168,7 @@ const SettingDef kSettings[] = {
     {L"Replay", L"video", L"replay_seconds", L"Replay buffer", L"number", L"45", 10, 300, 5, L"s", L"", L"", true},
     {L"Replay", L"video", L"replay_default", L"Without a pass", L"number", L"30", 5, 300, 5, L"s", L"", L"How far back PLAY goes when no pass is in the buffer", false},
     {L"Replay", L"video", L"quality", L"Picture quality", L"number", L"85", 30, 100, 5, L"%", L"", L"", true},
-    {L"CCTV look", L"cctv", L"on", L"CCTV look", L"bool", L"0", 0, 0, 0, L"", L"", L"Scan lines, noise, lens distortion and vignette, as on the ship's monitors (key C)", false},
+    {L"CCTV look", L"cctv", L"on", L"CCTV look", L"bool", L"1", 0, 0, 0, L"", L"", L"Scan lines, noise, lens distortion and vignette, as on the ship's monitors (key C)", false},
     {L"CCTV look", L"cctv", L"strength", L"Strength", L"percent", L"1", 0, 200, 5, L"%", L"", L"", false},
     {L"CCTV look", L"cctv", L"recordings_only", L"Apply to recordings only", L"bool", L"0", 0, 0, 0, L"", L"", L"", false},
     {L"CCTV look", L"cctv", L"grain", L"Noise", L"number", L"1", 0, 4, 0.1, L"\x00D7", L"", L"", false},
@@ -172,33 +179,49 @@ const SettingDef kSettings[] = {
     {L"Black box", L"blackbox", L"mishap_before", L"Before a mishap", L"number", L"60", 5, 1800, 5, L"s", L"", L"", false},
     {L"Black box", L"blackbox", L"mishap_after", L"After a mishap", L"number", L"15", 0, 120, 5, L"s", L"", L"", false},
     // streams: what they share, then each target ([stream] = 1, [stream2] ...; options of a multi field: its choices)
+    {L"Stream", L"stream", L"autostart", L"Start automatically", L"bool", L"0", 0, 0, 0, L"", L"", L"Once DCS is connected and a picture is ready", false},
     {L"Stream", L"stream", L"bitrate_kbps", L"Bit rate", L"number", L"2500", 300, 20000, 100, L"kbit/s", L"", L"", true},
     {L"Stream", L"stream", L"composite_kbps", L"Composite bit rate", L"number", L"6000", 1000, 30000, 100, L"kbit/s", L"", L"1920 \x00D7 1080", false},
     {L"Stream", L"stream", L"audio", L"Silent audio track", L"bool", L"1", 0, 0, 0, L"", L"", L"Some services refuse video without audio", false},
+    {L"Stream 1", L"stream", L"label", L"Label", L"text", L"", 0, 6, 0, L"", L"", L"", false},
     {L"Stream 1", L"stream", L"url", L"Server", L"text", L"", 0, 0, 0, L"", L"", L"rtmp://server/app (plain RTMP)", false},
     {L"Stream 1", L"stream", L"key", L"Stream key", L"password", L"", 0, 0, 0, L"", L"", L"", false},
     {L"Stream 1", L"stream", L"source", L"Source", L"select", L"a", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;composite|Composite;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"", false},
     {L"Stream 1", L"stream", L"tiles", L"Composite", L"multi", L"a,b", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Up to four, arranged by their number", false},
+    {L"Stream 2", L"stream2", L"label", L"Label", L"text", L"", 0, 6, 0, L"", L"", L"", false},
     {L"Stream 2", L"stream2", L"url", L"Server", L"text", L"", 0, 0, 0, L"", L"", L"rtmp://server/app (plain RTMP)", false},
     {L"Stream 2", L"stream2", L"key", L"Stream key", L"password", L"", 0, 0, 0, L"", L"", L"", false},
     {L"Stream 2", L"stream2", L"source", L"Source", L"select", L"a", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;composite|Composite;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"", false},
     {L"Stream 2", L"stream2", L"tiles", L"Composite", L"multi", L"a,b", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Up to four, arranged by their number", false},
+    {L"Stream 3", L"stream3", L"label", L"Label", L"text", L"", 0, 6, 0, L"", L"", L"", false},
     {L"Stream 3", L"stream3", L"url", L"Server", L"text", L"", 0, 0, 0, L"", L"", L"rtmp://server/app (plain RTMP)", false},
     {L"Stream 3", L"stream3", L"key", L"Stream key", L"password", L"", 0, 0, 0, L"", L"", L"", false},
     {L"Stream 3", L"stream3", L"source", L"Source", L"select", L"a", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;composite|Composite;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"", false},
     {L"Stream 3", L"stream3", L"tiles", L"Composite", L"multi", L"a,b", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Up to four, arranged by their number", false},
+    {L"Stream 4", L"stream4", L"label", L"Label", L"text", L"", 0, 6, 0, L"", L"", L"", false},
     {L"Stream 4", L"stream4", L"url", L"Server", L"text", L"", 0, 0, 0, L"", L"", L"rtmp://server/app (plain RTMP)", false},
     {L"Stream 4", L"stream4", L"key", L"Stream key", L"password", L"", 0, 0, 0, L"", L"", L"", false},
     {L"Stream 4", L"stream4", L"source", L"Source", L"select", L"a", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;composite|Composite;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"", false},
     {L"Stream 4", L"stream4", L"tiles", L"Composite", L"multi", L"a,b", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Up to four, arranged by their number", false},
     // outputs: Spout senders and virtual cameras (outputs.inc); "action": a key (value "id|LABEL")
-    {L"Outputs", L"outputs", L"spout", L"Spout", L"multi", L"", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"For OBS (Spout2 plugin) and other Spout receivers", false},
-    {L"Outputs", L"outputs", L"cameras", L"Virtual cameras", L"multi", L"", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Webcams for Discord, Teams, OBS ... (Windows 11)", false},
+    {L"Outputs", L"outputs", L"spout", L"Spout", L"multi", L"", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island;composite|Composite", L"For OBS (Spout2 plugin) and other Spout receivers", false},
+    {L"Outputs", L"outputs", L"cameras", L"Virtual cameras", L"multi", L"", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island;composite|Composite", L"Webcams for Discord, Teams, OBS ... (Windows 11)", false},
+    {L"Outputs", L"outputs", L"tiles", L"Composite", L"multi", L"a,b", 0, 0, 0, L"", L"a|Monitor A;b|Monitor B;plat|PLAT;lso1|LSO 1;lso2|LSO 2;island|Island", L"Up to four, arranged by their number", false},
     {L"Outputs", L"outputs", L"component", L"Camera component", L"action", L"", 0, 0, 0, L"", L"", L"Installs the virtual cameras for every user (administrator)", false},
+    // benchmark (bench.inc): armed for the next mission start, switched off again when the run starts
+    {L"Benchmark", L"benchmark", L"next_mission", L"Benchmark next mission", L"bool", L"0", 0, 0, 0, L"", L"",
+     L"At the next mission start, about 6 minutes: DCS with the hook alone, with PLAT, LSO 1 and LSO 2, then 1 to 5 camera views with recording off and on (nothing is saved). Leave the mission to stop it", false},
+    {L"Benchmark", L"benchmark", L"last", L"Last report", L"action", L"", 0, 0, 0, L"", L"", L"", false},
+    {L"Benchmark", L"benchmark", L"folder", L"Reports", L"action", L"", 0, 0, 0, L"", L"", L"%LOCALAPPDATA%\\ILARTS\\benchmarks", false},
+    // "info": a value shown, not edited or saved
+    {L"Installation", L"install", L"version", L"Version", L"info", L"", 0, 0, 0, L"", L"", L"", false},
     {L"Installation", L"install", L"repair", L"Check and repair", L"action", L"", 0, 0, 0, L"", L"", L"After a DCS update or if something stopped working: restores the hook and permissions, and checks the DCS version", false},
     {L"Installation", L"install", L"permissions", L"DCS permissions", L"action", L"", 0, 0, 0, L"", L"", L"The two lines in Saved Games\\DCS\\Config\\autoexec.cfg the hook needs (single player, hosting). REMOVE before you uninstall with OMM or OvGME", false},
+    {L"Installation", L"install", L"logs", L"Logs", L"action", L"", 0, 0, 0, L"", L"", L"ILARTS.log, in %LOCALAPPDATA%\\ILARTS", false},
     {L"Experimental", L"experimental", L"flir", L"FLIR view", L"bool", L"0", 0, 0, 0, L"", L"",
      L"A FLIR key on each camera's PTZ panel: DCS's infrared picture for that camera. Experimental, and costly: a camera in FLIR can cut DCS's frame rate considerably", false},
+    {L"Developer", L"developer", L"tuning", L"Camera tuning", L"bool", L"0", 0, 0, 0, L"", L"",
+     L"A TUNE key on each camera's PTZ panel: moves the camera in DCS and saves its position in Saved Games\\DCS\\Config\\ILARTS-cameras.lua", false},
     {L"Window", L"viewer", L"auto_start", L"Start with DCS", L"bool", L"1", 0, 0, 0, L"", L"", L"Opens ILARTS when a mission starts, if it is not open already", false},
     {L"Window", L"viewer", L"antialias", L"Anti-aliasing", L"bool", L"1", 0, 0, 0, L"", L"", L"", false},
 };
@@ -209,13 +232,56 @@ std::wstring IniGet(const wchar_t* section, const wchar_t* key, const wchar_t* d
     return b;
 }
 
-bool AutoexecHasBlock();  // repair.inc
+bool AutoexecHasOurs();     // repair.inc
+std::wstring BenchLastReport();  // bench.inc
+std::wstring BenchStatus();
+std::wstring BenchLamp(std::wstring* tip);
+void BenchLampClick();
+
+// A settings panel's info marker (the "i" beside its name plate): its tooltip.
+const wchar_t* SectionTip(const wchar_t* group) {
+    if (!wcscmp(group, L"Benchmark"))
+        return L"How to run a benchmark\n"
+               L"\x00B7 Load Missions\\ILARTS Benchmark.miz, a calm, repeatable scene: parked on deck in the cockpit, not flying.\n"
+               L"\x00B7 Keep DCS in front. Do not touch the controls, change the view or pause.\n"
+               L"\x00B7 It starts 10 s after the mission runs and takes about 6 minutes.\n"
+               L"\x00B7 Compare each stage with Hook only. Runs differ by a few percent.";
+    return nullptr;
+}
+
+// The user guide: the PDF the packages install (Mods\tech\ILARTS, one folder above bin), a development build's
+// (the repository's docs folder, two above build\Release), else the one on GitHub.
+constexpr wchar_t kGuideUrl[] = L"https://github.com/Nubs-dev/DCS-ILARTS/blob/main/docs/DCS-ILARTS-Guide.pdf";
+std::wstring GuidePath() {
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring dir = exe;
+    dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
+    for (const wchar_t* rel : {L"..\\DCS-ILARTS-Guide.pdf", L"..\\..\\docs\\DCS-ILARTS-Guide.pdf", L"DCS-ILARTS-Guide.pdf"}) {
+        wchar_t full[MAX_PATH];
+        if (GetFullPathNameW((dir + rel).c_str(), MAX_PATH, full, nullptr) && GetFileAttributesW(full) != INVALID_FILE_ATTRIBUTES) return full;
+    }
+    return {};
+}
+void OpenGuide() {
+    const std::wstring p = GuidePath(), target = p.empty() ? std::wstring(kGuideUrl) : p;
+    TestLog(L"guide: " + target);
+    if (!g_test.offscreen) ShellExecuteW(nullptr, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+bool AutoexecAllowsNow();  // repair.inc
 std::wstring SettingValue(const SettingDef& d) {
+    if (!wcscmp(d.section, L"install") && !wcscmp(d.key, L"version"))  // 0.0.0: built without -DILARTS_VERSION
+        return wcscmp(ILARTS_VERSION_W, L"0.0.0") ? ILARTS_VERSION_W : L"DEVELOPMENT";
     if (!wcscmp(d.section, L"install") && !wcscmp(d.key, L"repair")) return L"repair|REPAIR";
-    if (!wcscmp(d.section, L"install") && !wcscmp(d.key, L"permissions")) return AutoexecHasBlock() ? L"perm_remove|REMOVE" : L"perm_add|ADD";
+    if (!wcscmp(d.section, L"install") && !wcscmp(d.key, L"logs")) return L"logs|OPEN";
+    if (!wcscmp(d.section, L"benchmark") && !wcscmp(d.key, L"last")) return BenchLastReport().empty() ? L"none|\x2014" : L"bench_last|OPEN";
+    if (!wcscmp(d.section, L"benchmark") && !wcscmp(d.key, L"folder")) return L"bench_folder|OPEN";
+    if (!wcscmp(d.section, L"install") && !wcscmp(d.key, L"permissions"))  // allowed by lines ILARTS did not write: nothing to add or remove
+        return AutoexecHasOurs() ? L"perm_remove|REMOVE" : AutoexecAllowsNow() ? L"none|ALLOWED" : L"perm_add|ADD";
     if (!wcscmp(d.section, L"outputs") && !wcscmp(d.key, L"component"))
         return g_vcamSys.installer ? L"busy|\x2026" : !VCamApi() ? L"none|WINDOWS 11" : VCamInstalled() ? L"cam_remove|REMOVE" : L"cam_install|INSTALL";
     if (!wcscmp(d.section, L"video") && !wcscmp(d.key, L"folder")) return VideoFolder();
+    if (!wcscmp(d.section, L"video") && !wcscmp(d.key, L"stills_folder")) return CustomStillsFolder();
     return IniGet(d.section, d.key, d.def);
 }
 
@@ -229,11 +295,13 @@ void SettingsForm(Json& s) {
     s.open(L"sections", L'[');
     const wchar_t* group = nullptr;
     for (const auto& d : kSettings) {
+        if (!wcscmp(d.section, L"developer") && !DevBuild()) continue;  // the Developer settings: development builds only
         if (!group || wcscmp(group, d.group) != 0) {
             if (group) s.close(L']'), s.close();
             group = d.group;
             s.open(nullptr);
             s.str(L"title", d.group);
+            if (const wchar_t* tip = SectionTip(d.group)) s.str(L"tip", tip);
             s.open(L"fields", L'[');
         }
         const std::wstring v = SettingValue(d), type = d.type;
@@ -245,7 +313,9 @@ void SettingsForm(Json& s) {
         else if (type == L"number") s.num(L"value", _wtof(v.c_str()));
         else if (type == L"percent") s.num(L"value", std::round(_wtof(v.c_str()) * 100));
         else s.str(L"value", v);
+        if (!wcsncmp(d.section, L"stream", 6) && wcscmp(d.group, L"Stream")) s.str(L"default", d.def);  // a stream target's: CLEAR
         if (type == L"number" || type == L"percent") s.num(L"min", d.lo), s.num(L"max", d.hi), s.num(L"step", d.step);
+        else if (type == L"text" && d.hi > 0) s.num(L"max", d.hi);  // its length
         if (d.unit[0]) s.str(L"unit", d.unit);
         if (d.hint[0]) s.str(L"hint", d.hint);
         if (d.restart) s.flag(L"restart", true);
@@ -291,7 +361,7 @@ void ApplyLiveSettings() {
         const std::wstring v = IniGet(sec, key, L"");
         return v.empty() ? def : _wtof(v.c_str());
     };
-    g_cctv.on = num(L"cctv", L"on", 0) > 0.5;
+    g_cctv.on = num(L"cctv", L"on", 1) > 0.5;  // on unless switched off
     g_cctv.strength = static_cast<float>(std::clamp(num(L"cctv", L"strength", 1), 0.0, 2.0));
     g_cctv.recOnly = num(L"cctv", L"recordings_only", 0) > 0.5;
     g_cctv.grain = static_cast<float>(std::clamp(num(L"cctv", L"grain", 1), 0.0, 4.0));
@@ -300,6 +370,7 @@ void ApplyLiveSettings() {
     g_cctv.vignette = static_cast<float>(std::clamp(num(L"cctv", L"vignette", 1), 0.0, 4.0));
     g_antialias = num(L"viewer", L"antialias", 1) > 0.5;
     g_expFlir = num(L"experimental", L"flir", 0) > 0.5;
+    TuneSettings();
     if (!g_expFlir) std::fill(std::begin(g_flirOn), std::end(g_flirOn), false);
     g_bb.minutes = std::clamp(num(L"blackbox", L"minutes", 5), 1.0, 30.0);
     g_bb.before = std::clamp(num(L"blackbox", L"mishap_before", 60), 5.0, g_bb.minutes * 60);
@@ -311,6 +382,7 @@ void ApplyLiveSettings() {
     if (g_rec.ok) g_rec.replayDefault = std::clamp(num(L"video", L"replay_default", 30), 5.0, g_rec.main.eng.config().ringSeconds);
     g_rec.nameFormat = IniGet(L"video", L"filename", L"{date} {time} {callsign} Case {case} {grade}");
     g_rec.folder.clear();  // VideoFolder() reads it again
+    StorageReadSettings();
     LiveApply();
     OutputsApply();
 }
@@ -342,6 +414,7 @@ void SettingsSave(const std::wstring& j) {
         std::wstring v;
         if (type == L"text" || type == L"password" || type == L"select" || type == L"path" || type == L"multi") {
             v = JsonStr(j.substr(at), (std::wstring(d.section) + L"." + d.key).c_str());
+            if (type == L"text" && d.hi > 0 && v.size() > static_cast<size_t>(d.hi)) v.resize(static_cast<size_t>(d.hi));
         } else {
             double n = 0;
             if (!JsonNum(j.substr(at), (std::wstring(d.section) + L"." + d.key).c_str(), &n)) continue;
@@ -409,12 +482,14 @@ std::wstring FileDialog(bool save, bool folder, const wchar_t* title, const wcha
 }
 
 std::wstring RepairNow();  // repair.inc
+void BenchOpenFolder();    // bench.inc
+void BenchOpenLast();
 std::wstring PermissionsNow(bool add);  // repair.inc
 void SettingsAction(const std::wstring& id, const std::wstring& key) {
     if (id == L"openFile") {
         OpenSettingsFile();
-    } else if (id == L"browse" && key == L"video.folder") {
-        const std::wstring f = FileDialog(false, true, L"Folder for recordings", nullptr);
+    } else if (id == L"browse" && (key == L"video.folder" || key == L"video.stills_folder")) {
+        const std::wstring f = FileDialog(false, true, key == L"video.folder" ? L"Folder for recordings" : L"Folder for stills", nullptr);
         if (!f.empty() && g_con.web) {
             Json a;
             a.open(nullptr);
@@ -433,6 +508,12 @@ void SettingsAction(const std::wstring& id, const std::wstring& key) {
         g_con.formMessage = PermissionsNow(id == L"perm_add");
         g_con.formRestart = false;
         ++g_con.formRev;
+    } else if (id == L"logs") {
+        OpenLogsFolder();
+    } else if (id == L"bench_folder") {
+        BenchOpenFolder();
+    } else if (id == L"bench_last") {
+        BenchOpenLast();
     } else if (id == L"cam_install" || id == L"cam_remove") {
         CameraComponentRun(id == L"cam_install");
         ++g_con.formRev;  // the key shows it is busy
@@ -482,10 +563,11 @@ bool ConsoleUiFolder(std::wstring* dir) {
 }
 
 // True when this PC can show the console: the WebView2 runtime is installed and the ui folder is there.
+// --test-no-webview2: as if the runtime were missing (tests the notice).
 bool ConsoleAvailable() {
     LPWSTR ver = nullptr;
     const HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &ver);
-    const bool ok = SUCCEEDED(hr) && ver && ver[0];
+    const bool ok = SUCCEEDED(hr) && ver && ver[0] && !g_test.noWebView2;
     if (ver) CoTaskMemFree(ver);
     return ok && ConsoleUiFolder(nullptr);
 }
@@ -554,7 +636,7 @@ HRESULT ConsoleControllerReady(ICoreWebView2CompositionController* cc, const std
             args->get_Uri(&uri);
             const std::wstring prefix = std::wstring(L"https://") + kUiHost + L"/";
             if (!uri || wcsncmp(uri, prefix.c_str(), prefix.size()) != 0) args->put_Cancel(TRUE);
-            else g_con.ready = false;  // (re)loading: wait for the page's 'ready'
+            else g_con.ready = g_con.pageKeys = false;  // (re)loading: wait for the page's 'ready'
             if (uri) CoTaskMemFree(uri);
             return S_OK;
         });
@@ -600,13 +682,13 @@ HRESULT ConsoleControllerReady(ICoreWebView2CompositionController* cc, const std
             args->get_KeyEventKind(&kind);
             args->get_VirtualKey(&vk);
             if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN) return S_OK;  // system keys (Alt+F4 ...) as usual
-            if (g_con.settingsOpen) return S_OK;  // typing in the settings dialog: the page's keys
+            if (g_con.settingsOpen || g_con.pageKeys) return S_OK;  // a dialog or pop-up open: the page's keys
             if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN) return S_OK;
             if (app.debug && (vk == VK_F12 || (vk == 'I' && (GetKeyState(VK_CONTROL) & 0x8000)))) return S_OK;  // DevTools
             COREWEBVIEW2_PHYSICAL_KEY_STATUS ks{};
             args->get_PhysicalKeyStatus(&ks);
             args->put_Handled(TRUE);
-            if (vk == 'N' && ks.WasKeyDown) return S_OK;  // no auto-repeat for the carrier step
+            if (KeyNoRepeat(static_cast<int>(vk)) && ks.WasKeyDown) return S_OK;  // no auto-repeat (carrier step, still)
             HandleKey(vk);
             ConsolePush();
             return S_OK;
@@ -811,6 +893,162 @@ ViewState ConsolePreviewView(int source) {
     return pv;
 }
 
+// ---- replay feeds: monitor B's picture and each preview's, in replay rings of their own, so an instant replay
+// plays every monitor on the wall (A's footage is the main channel's). A preview's ring is half size.
+struct ReplayFeed {
+    int source = -1;
+    bool preview = false;  // a preview's picture (as DCS makes it); else monitor B's
+    Channel ch;
+    double lastShown = 0;
+    std::vector<video::FramePtr> frames;  // the replay's footage of it
+    int shown = -1;
+    ID3D11Texture2D* tex = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
+};
+std::vector<std::unique_ptr<ReplayFeed>> g_feeds;
+
+ReplayFeed* FindFeed(int source, bool preview) {
+    for (auto& f : g_feeds)
+        if (f->source == source && f->preview == preview) return f.get();
+    return nullptr;
+}
+bool FeedShown(const ReplayFeed& f) {
+    if (!g_con.on) return false;
+    if (!f.preview) return g_con.wall == 1 && ConsoleSourceOf(g_con.secondKey) == f.source;
+    if (g_con.wall != 2) return false;
+    for (const auto& k : g_con.prev)
+        if (ConsoleSourceOf(k) == f.source) return true;
+    return false;
+}
+void FeedRelease(ReplayFeed& f) {
+    ChannelRelease(f.ch);
+    SafeRelease(f.srv);
+    SafeRelease(f.tex);
+    f.shown = -1;
+}
+void FeedsRelease() {
+    for (auto& f : g_feeds) FeedRelease(*f);
+}
+void FeedsShutdown() {
+    for (auto& f : g_feeds) {
+        FeedRelease(*f);
+        f->ch.eng.stop();
+    }
+    g_feeds.clear();
+}
+
+// Every loop: a feed for each picture on monitor B or a preview. One not on screen for a whole ring is dropped
+// (never during a replay).
+void FeedsTick(double now) {
+    if (!g_rec.ok) return;
+    auto want = [&](int s, bool preview) {
+        if (s < 0 || s >= FeedCount()) return;
+        ReplayFeed* f = FindFeed(s, preview);
+        if (!f) {
+            auto n = std::make_unique<ReplayFeed>();
+            n->source = n->ch.source = s;
+            n->preview = preview;
+            video::Engine::Config c = g_engCfg;
+            if (preview) c.w /= 2, c.h /= 2;
+            n->ch.ok = n->ch.eng.start(c);
+            f = n.get();
+            g_feeds.push_back(std::move(n));
+        }
+        f->lastShown = now;
+    };
+    if (g_con.on && g_con.wall == 1) want(ConsoleSourceOf(g_con.secondKey), false);
+    if (g_con.on && g_con.wall == 2)
+        for (const auto& k : g_con.prev) want(ConsoleSourceOf(k), true);
+    if (g_rec.replay) return;
+    for (size_t i = 0; i < g_feeds.size();) {
+        if (now - g_feeds[i]->lastShown <= g_engCfg.ringSeconds) {
+            ++i;
+            continue;
+        }
+        FeedRelease(*g_feeds[i]);
+        g_feeds[i]->ch.eng.stop();
+        g_feeds.erase(g_feeds.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+}
+
+// Each rendered frame: the feeds on screen, drawn as shown (a preview without adjustments) into their rings.
+void FeedsCapture() {
+    for (auto& f : g_feeds) {
+        if (!f->ch.ok) continue;
+        const bool on = FeedShown(*f);
+        const ViewState v = !on ? ViewState{} : f->preview ? ConsolePreviewView(f->source) : ViewFor(f->source);
+        ChannelCaptureWith(f->ch, v.main != nullptr, [&](ID3D11RenderTargetView* rtv, int w, int h) {
+            g_neutral = f->preview;
+            DrawFeed(v, rtv, Fit(static_cast<float>(w), static_cast<float>(h), ViewAspect(v), 1.0f));
+            g_neutral = false;
+        });
+    }
+}
+
+// A replay takes every feed's footage of the same time as A's.
+void FeedsReplayStart(double t0, double t1) {
+    for (auto& f : g_feeds) {
+        f->frames = f->ch.ok ? f->ch.eng.range(t0, t1) : std::vector<video::FramePtr>{};
+        f->shown = -1;
+    }
+}
+void FeedsReplayStop() {
+    for (auto& f : g_feeds) {
+        f->frames.clear();
+        f->frames.shrink_to_fit();
+        f->shown = -1;
+    }
+}
+
+// Saving a replay: a file of each other picture on the wall too ("<base> ISLAND"), one per source not on A
+// (monitor B's before a preview's, which is half size).
+void FeedsReplaySave(const std::wstring& base) {
+    std::vector<int> done{ProgramSource()};
+    for (const bool preview : {false, true})
+        for (auto& f : g_feeds) {
+            if (f->preview != preview || f->frames.size() < 2 || !FeedShown(*f)) continue;
+            if (std::find(done.begin(), done.end(), f->source) != done.end()) continue;
+            done.push_back(f->source);
+            f->ch.eng.saveClip(f->frames, UniqueVideoPath(base + L" " + SourceTag(f->source)));
+        }
+}
+void FeedsEach(const std::function<void(Channel&)>& fn) {
+    for (auto& f : g_feeds) fn(f->ch);
+}
+
+// The replay feed of what a monitor shows now (preview: a preview's), if the replay has footage of it.
+ReplayFeed* FeedInReplay(int source, bool preview) {
+    if (!g_rec.replay || g_rec.frames.empty()) return nullptr;
+    ReplayFeed* f = FindFeed(source, preview);
+    return f && !f->frames.empty() ? f : nullptr;
+}
+
+// A feed's picture at the replay's position (A's clock) in a monitor's screen; black where it has none then.
+void FeedDrawReplay(ReplayFeed& f, const ConsoleRect& r) {
+    const auto& c = f.ch.eng.config();
+    if (!f.tex) {
+        D3D11_TEXTURE2D_DESC td = CanvasDesc(c);
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(app.dev->CreateTexture2D(&td, nullptr, &f.tex)) || FAILED(app.dev->CreateShaderResourceView(f.tex, nullptr, &f.srv))) {
+            SafeRelease(f.tex);
+            return;
+        }
+        f.shown = -1;
+    }
+    const double t = g_rec.frames.front()->t + g_rec.pos;
+    const auto it = std::upper_bound(f.frames.begin(), f.frames.end(), t + 1e-6, [](double x, const video::FramePtr& p) { return x < p->t; });
+    if (it == f.frames.begin()) return;
+    const int idx = static_cast<int>(it - f.frames.begin()) - 1;
+    if (t - f.frames[idx]->t > 1.0) return;  // not on screen then
+    if (idx != f.shown) {
+        int w = 0, h = 0;
+        if (g_rec.jpeg.decode(f.frames[idx]->jpeg, &g_rec.decoded, &w, &h) && w == c.w && h == c.h)
+            app.ctx->UpdateSubresource(f.tex, 0, nullptr, g_rec.decoded.data(), static_cast<UINT>(w) * 4, 0);
+        f.shown = idx;
+    }
+    ConsoleCopy(f.srv, ConsoleFit(r, static_cast<float>(c.w) / static_cast<float>(c.h)));
+}
+
 void ConsoleRender() {
     if (!app.dev || !app.swap || !app.rtv) return;
     const float black[4] = {0, 0, 0, 1};
@@ -835,10 +1073,17 @@ void ConsoleRender() {
     RecCapture(v);  // recordings, black box, stream (also during a replay)
     app.ctx->OMSetRenderTargets(1, &app.rtv, nullptr);
     if (drew) RecDrawBadges(pvp, false);  // the replay's progress bar (the page shows the rest)
-    if (v2.main && ConsoleRectOf(L"second", &r)) DrawFeed(v2, app.rtv, ConsoleFit(r, ViewAspect(v2)));
+    if (ConsoleRectOf(L"second", &r)) {
+        if (ReplayFeed* f = FeedInReplay(s2, false)) FeedDrawReplay(*f, r);
+        else if (v2.main) DrawFeed(v2, app.rtv, ConsoleFit(r, ViewAspect(v2)));
+    }
     for (int k = 0; k < 4; ++k) {
         const int i = ConsoleSourceOf(g_con.prev[k]);
         if (i < 0 || !ConsoleRectOf((L"p" + std::to_wstring(k)).c_str(), &r)) continue;
+        if (ReplayFeed* f = FeedInReplay(i, true)) {
+            FeedDrawReplay(*f, r);
+            continue;
+        }
         const ViewState pv = ConsolePreviewView(i);
         if (!pv.main) continue;
         g_neutral = true;
@@ -859,6 +1104,61 @@ void ConsoleRender() {
 }
 
 // ---------------------------------------------------------------- state for the page
+
+// The videos folder's contents (subfolders too): the MP4s in it and the bytes of every file.
+struct FolderStats {
+    int captures = 0;
+    unsigned long long bytes = 0;
+};
+void ScanFolder(const std::wstring& dir, FolderStats& st, int depth) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (depth < 8 && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && wcscmp(fd.cFileName, L".") && wcscmp(fd.cFileName, L".."))
+                ScanFolder(dir + L"\\" + fd.cFileName, st, depth + 1);
+            continue;
+        }
+        st.bytes += (static_cast<unsigned long long>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+        const size_t n = wcslen(fd.cFileName);
+        if (n > 4 && !_wcsicmp(fd.cFileName + n - 4, L".mp4")) ++st.captures;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+// Rescanned every 2 s on a worker thread: a big folder or a slow drive never holds up the window.
+struct {
+    std::future<FolderStats> job;
+    FolderStats last;
+    bool have = false;
+    ULONGLONG at = 0;
+} g_folderStats;
+const FolderStats* VideoFolderStats() {
+    auto& f = g_folderStats;
+    if (f.job.valid() && f.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        f.last = f.job.get();
+        f.have = true;
+    }
+    if (!f.job.valid() && GetTickCount64() - f.at >= 2000) {
+        f.at = GetTickCount64();
+        f.job = std::async(std::launch::async, [dir = VideoFolder()] {
+            FolderStats st;
+            ScanFolder(dir, st, 0);
+            return st;
+        });
+    }
+    return f.have ? &f.last : nullptr;
+}
+
+// "12 CAPTURES · 3.4 GB"
+std::wstring FolderStatsText(const FolderStats& st) {
+    wchar_t b[64];
+    const double mb = st.bytes / 1e6;
+    if (mb >= 1000) swprintf_s(b, L"%d CAPTURE%s \x00B7 %.1f GB", st.captures, st.captures == 1 ? L"" : L"S", mb / 1000);
+    else swprintf_s(b, L"%d CAPTURE%s \x00B7 %.0f MB", st.captures, st.captures == 1 ? L"" : L"S", mb);
+    return b;
+}
 
 // Frames per second a source delivers (the viewer's own station screens: the PLAT's).
 float ConsoleSourceFps(int source) {
@@ -970,6 +1270,171 @@ void ConsoleSetWall(int w) {
     ConsolePush();
 }
 
+// ---- deck cycle: a monitor (A or B) showing a deck position steps through the positions ticked in its CYCLE
+// pop-up, one every `seconds` ([viewer] cycle_a / cycle_b = 0 / 1, cycle_a_views = source keys, cycle_a_seconds).
+// Seamless: when the time is up the next position is wanted first (CycleWants: it takes a free render slot and is
+// asked for its view), the monitor switches once that slot delivers frames of it (kCycleFrames after DCS reports it
+// at that position), and only then is the previous one let go (CameraReconcile gives its slot back unless something
+// else shows it). No free slot, or no picture within kCycleWait: the monitor switches in place (the slot moves).
+// It runs only while the monitor is on the wall and shows a deck position, and not during a replay. Picking a
+// position by hand (◀ ▶, the list, another monitor) starts the interval again from there; holding the PTZ stick on
+// the monitor's camera holds it on that position (the interval starts again on release).
+constexpr double kCycleMinSeconds = 2, kCycleMaxSeconds = 3600, kCycleWait = 4;
+constexpr LONG64 kCycleFrames = 3;
+struct DeckCycle {
+    bool loaded = false, on = false;
+    std::vector<std::wstring> keys;  // the positions ticked (source keys), in no particular order
+    double seconds = 10;
+    int at = -1;            // the position the monitor showed at the last tick
+    double nextAt = 0;      // when the next step is due
+    int pending = -1;       // the position being brought up (a source), -1 = none
+    double pendingSince = 0;
+    LONG64 pendingBase = -1;  // its target's frame counter when DCS first showed it at that position
+    double heldUntil = 0;   // the PTZ stick is held on this monitor's camera
+};
+DeckCycle g_cycle[2];
+const wchar_t* CycleIniKey(int u) { return u ? L"cycle_b" : L"cycle_a"; }
+DeckCycle& Cycle(int u) {
+    DeckCycle& c = g_cycle[u ? 1 : 0];
+    if (c.loaded) return c;
+    c.loaded = true;
+    const std::wstring k = CycleIniKey(u);
+    c.on = GetPrivateProfileIntW(L"viewer", k.c_str(), 0, app.iniPath.c_str()) != 0;
+    const std::wstring sel = IniGet(L"viewer", (k + L"_views").c_str(), L"");
+    for (size_t a = 0; a <= sel.size();) {
+        size_t e = sel.find(L',', a);
+        if (e == std::wstring::npos) e = sel.size();
+        if (e > a) c.keys.push_back(sel.substr(a, e - a));
+        a = e + 1;
+    }
+    const double s = _wtof(IniGet(L"viewer", (k + L"_seconds").c_str(), L"10").c_str());
+    c.seconds = s > 0 ? std::clamp(s, kCycleMinSeconds, kCycleMaxSeconds) : 10;
+    return c;
+}
+void CycleSave(int u) {
+    const DeckCycle& c = Cycle(u);
+    const std::wstring k = CycleIniKey(u);
+    std::wstring sel;
+    for (const auto& x : c.keys) sel += (sel.empty() ? L"" : L",") + x;
+    wchar_t sec[32];
+    swprintf_s(sec, L"%g", c.seconds);
+    WritePrivateProfileStringW(L"viewer", k.c_str(), c.on ? L"1" : L"0", app.iniPath.c_str());
+    WritePrivateProfileStringW(L"viewer", (k + L"_views").c_str(), sel.c_str(), app.iniPath.c_str());
+    WritePrivateProfileStringW(L"viewer", (k + L"_seconds").c_str(), sec, app.iniPath.c_str());
+}
+bool CycleTicked(const DeckCycle& c, int s) { return std::find(c.keys.begin(), c.keys.end(), SourceKey(s)) != c.keys.end(); }
+int CycleTickedCount(const DeckCycle& c) {
+    int n = 0;
+    for (int k = 0; k < CameraCount() - g_firstPos; ++k) n += CycleTicked(c, PositionSource(k)) ? 1 : 0;
+    return n;
+}
+// A position a cycle is bringing up: it renders already (CameraNeeded).
+bool CycleWants(int s) {
+    for (const auto& c : g_cycle)
+        if (c.pending >= 0 && c.pending == s) return true;
+    return false;
+}
+int CycleMonSource(int u) { return u ? ConsoleSecond() : ProgramSource(); }
+// The next ticked position after cur (in the positions' order), not shown elsewhere; -1 = none.
+int CycleNext(int u, int cur) {
+    const DeckCycle& c = Cycle(u);
+    const int n = CameraCount() - g_firstPos, at = IsDeckSource(cur) ? g_lcams[cur - kFeeds].pos : -1;
+    for (int step = 1; step <= n; ++step) {
+        const int s = PositionSource(((at + step) % n + n) % n);
+        if (s == cur || !CycleTicked(c, s) || SourceShown(s) || CycleWants(s)) continue;
+        return s;
+    }
+    return -1;
+}
+std::wstring CycleSlotName(int s) {
+    const int p = IsDeckSource(s) ? PhysOf(s - kFeeds) : -1;
+    return p >= 0 ? Utf8W(PhysName(p)) : std::wstring(L"none");
+}
+void CycleCancel(DeckCycle& c) {
+    if (c.pending < 0) return;
+    c.pending = -1;
+    CameraReconcile();  // its slot goes back
+}
+// The monitor shows the position brought up; the one before lets its slot go.
+void CycleSwitch(int u, DeckCycle& c, int to, double now, const wchar_t* how) {
+    const int from = CycleMonSource(u);
+    if (u) {
+        ConsoleSetSecond(to);
+    } else {
+        SelectFeed(to);
+        ConsoleNoteDeck(to);
+    }
+    c.pending = -1;
+    CameraReconcile();
+    c.at = to;
+    c.nextAt = now + c.seconds;
+    ConsoleLog(std::wstring(L"cycle ") + (u ? L"B" : L"A") + L": " + SourceTag(to) + L" shown (" + how + L", slot " + CycleSlotName(to) +
+               L"); " + SourceTag(from) + L" slot after release: " + CycleSlotName(from));
+    ConsolePush();
+}
+void CycleTick(double now) {
+    for (int u = 0; u < 2; ++u) {
+        DeckCycle& c = Cycle(u);
+        const int cur = CycleMonSource(u);
+        const bool run = g_con.on && c.on && IsDeckSource(cur) && (u == 0 || g_con.wall == 1) && !g_rec.replay && CamLive() &&
+                         CycleTickedCount(c) > 0;
+        if (!run) {
+            CycleCancel(c);
+            c.at = -1;
+            continue;
+        }
+        if (cur != c.at || now < c.heldUntil) {  // a new position (by hand or a cycle step), or the stick is held: wait from now
+            CycleCancel(c);
+            c.at = cur;
+            c.nextAt = now + c.seconds;
+            continue;
+        }
+        if (c.pending < 0) {
+            if (now < c.nextAt) continue;
+            const int next = CycleNext(u, cur);
+            if (next < 0) {
+                c.nextAt = now + c.seconds;
+                continue;
+            }
+            c.pending = next;
+            c.pendingSince = now;
+            c.pendingBase = -1;
+            CameraReconcile();  // it takes a free slot, if there is one
+            if (PhysOf(next - kFeeds) < 0) {  // none free: the monitor's own slot moves
+                CycleSwitch(u, c, next, now, L"in place, no free slot");
+                continue;
+            }
+            ConsoleLog(std::wstring(L"cycle ") + (u ? L"B" : L"A") + L": " + SourceTag(cur) + L" -> " + SourceTag(next) + L": slot " +
+                       CycleSlotName(next) + L" asked for it");
+            continue;
+        }
+        const int next = c.pending;
+        if (!CycleTicked(c, next) || SourceShown(next)) {  // unticked meanwhile, or another monitor took it
+            CycleCancel(c);
+            c.nextAt = now;
+            continue;
+        }
+        if (PhysOf(next - kFeeds) < 0) {  // its slot went to a monitor that needed it
+            CycleSwitch(u, c, next, now, L"in place, slot lost");
+            continue;
+        }
+        const ViewState v = ViewFor(next);  // only once DCS renders that slot at this position
+        if (v.main && c.pendingBase < 0) c.pendingBase = v.main->lastFrame;
+        if (v.main && c.pendingBase >= 0 && v.main->lastFrame >= c.pendingBase + kCycleFrames) {
+            wchar_t how[64];
+            swprintf_s(how, L"ready after %.2f s", now - c.pendingSince);
+            CycleSwitch(u, c, next, now, how);
+        } else if (now - c.pendingSince > kCycleWait) {
+            CycleSwitch(u, c, next, now, L"no picture in time");
+        }
+    }
+}
+// The PTZ stick moves the camera on monitor u: the cycle holds there.
+void CycleHold(int s, double now) {
+    for (int u = 0; u < 2; ++u)
+        if (s >= 0 && CycleMonSource(u) == s) Cycle(u).heldUntil = now + 0.5;
+}
+
 // The source a monitor's controls act on: {"mon":1} = monitor B, else monitor A (the program).
 int ConsoleMonSource(const std::wstring& j) {
     double m = 0;
@@ -998,12 +1463,13 @@ std::wstring ConsoleButtonName(int s) {  // a key's label (CATAPULT -> CAT); a d
 std::wstring ConsolePlate(int s) { return s < kFeeds ? std::wstring(kPlateName[s]) : SourceTag(s) + L" CAMERA"; }  // a view's name
 
 float ConsoleSourceFps(int source);
-// One monitor of the wall: what it shows, its message, and the levels and PTZ of that picture (the levels follow
-// the classic sidebar's rules: none for LSO 2; exposure only in the Pipeline mode).
+// One monitor of the wall: what it shows, its message, and the levels and PTZ of that picture (no levels for LSO 2;
+// exposure only in the Pipeline mode).
 void ConsoleMonitor(Json& s, int src, bool program) {
     const bool valid = src >= 0 && src < FeedCount(), compatBad = HeaderValid() && app.header->compat.state == 3;
     const ViewState v = valid ? ViewFor(src) : ViewState{};
-    const bool camFeed = valid && src >= kFeeds, picture = v.main != nullptr, replay = program && g_rec.replay;
+    const bool camFeed = valid && src >= kFeeds, picture = v.main != nullptr,
+               replay = program ? g_rec.replay : valid && FeedInReplay(src, false) != nullptr;
     s.open(nullptr);
     s.str(L"id", valid ? ConsoleSourceId(src) : L"");
     s.str(L"name", valid ? ConsoleTag(src) : L"");
@@ -1016,6 +1482,7 @@ void ConsoleMonitor(Json& s, int src, bool program) {
     }
     s.flag(L"signal", picture || replay);
     s.flag(L"burnIns", camFeed && !replay);  // the PLAT, the station screens and recordings carry their own
+    s.flag(L"replay", replay);
     if (camFeed) s.str(L"burnName", SourceTag(src));
     s.flag(L"rec", valid && RecArmed(src));
     // a deck position: all the deck positions (the view selector) and which one this is
@@ -1025,7 +1492,20 @@ void ConsoleMonitor(Json& s, int src, bool program) {
         s.open(L"views", L'[');
         for (int n = 0; n < CameraViewCount(i); ++n) s.str(nullptr, CameraViewNameAt(i, n));
         s.close(L']');
+        s.open(L"hangar", L'[');  // the views on the hangar deck (the lists group them apart)
+        for (int n = 0; n < CameraViewCount(i); ++n)
+            if (CameraViewHangarAt(i, n)) s.num(nullptr, n);
+        s.close(L']');
         s.num(L"view", k);
+        const DeckCycle& c = Cycle(program ? 0 : 1);  // its deck cycle: on, the positions ticked, the interval
+        s.open(L"cycle");
+        s.flag(L"on", c.on);
+        s.num(L"seconds", c.seconds);
+        s.open(L"sel", L'[');
+        for (int n = 0; n < CameraViewCount(i); ++n)
+            if (CycleTicked(c, PositionSource(n))) s.num(nullptr, n);
+        s.close(L']');
+        s.close();
     }
     {
         std::wstring time, ship;
@@ -1093,6 +1573,7 @@ void ConsoleMonitor(Json& s, int src, bool program) {
         s.flag(L"live", picture);
         s.flag(L"manual", ps.manual != 0);
         const CamTrack& tr = TrackOf(i);
+        s.flag(L"track", !IsHangar(i));  // false: no AUTO / TARGET (a hangar position)
         s.flag(L"armed", tr.armed);
         s.flag(L"auto", tr.armed && ps.manual == 0);  // the joystick suspends it until AUTO or REST
         s.num(L"target", tr.target);
@@ -1109,6 +1590,7 @@ void ConsoleMonitor(Json& s, int src, bool program) {
         s.num(L"zoom", ps.zoom > 0.05f ? ps.zoom : 1.0f);
         s.flag(L"flirAvail", g_expFlir);  // [experimental] flir: the FLIR key is shown
         s.flag(L"flir", g_expFlir && i < 16 && g_flirOn[i]);
+        TuneJson(s, i);  // [developer] tuning: the TUNE panel
         s.close();
     } else {
         s.null(L"ptz");
@@ -1127,7 +1609,20 @@ std::wstring ConsoleState() {
     s.flag(L"nativeLook", true);
     s.flag(L"windowButtons", true);
     s.flag(L"settings", true);
-    s.str(L"status", compatBad ? L"DCS NOT COMPATIBLE" : !HeaderValid() ? L"WAITING FOR DCS" : ProgramSource() < 0 ? L"NO SOURCE" : progName + L" \x00B7 " + (picture ? res : L"NO SIGNAL"));
+    const std::wstring bench = BenchStatus();  // a benchmark under way
+    s.str(L"status", !bench.empty() ? bench : compatBad ? L"DCS NOT COMPATIBLE" : !HeaderValid() ? L"WAITING FOR DCS" : ProgramSource() < 0 ? L"NO SOURCE" : progName + L" \x00B7 " + (picture ? res : L"NO SIGNAL"));
+    {  // the title bar's benchmark lamp: armed, running, complete, error (bench.inc)
+        std::wstring tip;
+        const std::wstring lamp = BenchLamp(&tip);
+        if (lamp.empty()) {
+            s.null(L"bench");
+        } else {
+            s.open(L"bench");
+            s.str(L"state", lamp);
+            s.str(L"tip", tip);
+            s.close();
+        }
+    }
     if (GetTickCount64() < g_flashUntil) s.str(L"flash", Upper(g_flash));
     // the knobs' ranges are the application's (contrast and gamma sweep logarithmically, as the sliders did)
     s.open(L"knobs");
@@ -1154,8 +1649,10 @@ std::wstring ConsoleState() {
         s.open(nullptr);
         s.str(L"id", ConsoleSourceId(i));
         s.str(L"name", ConsoleButtonName(i));
-        s.str(L"key", i < 9 ? std::to_wstring(i + 1) : L"");
+        const int keySlot = std::min(i, kFeeds + g_firstPos);  // the source keys: a key each, then one for DECK
+        s.str(L"key", keySlot < 9 ? std::to_wstring(keySlot + 1) : L"");
         if (IsDeckSource(i)) s.str(L"group", L"deck");  // one DECK key; the view selector picks the position
+        if (IsDeckSource(i)) s.flag(L"hangar", IsHangar(i - kFeeds));  // a hangar deck position
         s.str(L"plate", ConsolePlate(i));
         s.flag(L"signal", ViewFor(i).main != nullptr);
         s.flag(L"selected", i == ProgramSource());
@@ -1176,12 +1673,20 @@ std::wstring ConsoleState() {
     for (int i = 0; i < CarrierCount(); ++i) {
         const auto& c = app.header->carriers[i];
         std::wstring hull = Ascii(c.type, sizeof(c.type));
+        if (hull == L"Stennis") hull = L"CVN_74";  // the older Stennis model
         for (auto& ch : hull)
             if (ch == L'_') ch = L'-';
+        // the ship's name for each hull the PLAT can sit on (the hook's carrier types)
+        static const std::pair<const wchar_t*, const wchar_t*> kShipNames[] = {
+            {L"CVN-71", L"ROOSEVELT"}, {L"CVN-72", L"LINCOLN"}, {L"CVN-73", L"WASHINGTON"}, {L"CVN-74", L"STENNIS"}, {L"CVN-75", L"TRUMAN"}};
+        std::wstring name;
+        for (const auto& [h, n] : kShipNames)
+            if (hull == h) name = n;
         s.open(nullptr);
         s.str(L"id", std::to_wstring(i));
         s.str(L"unit", Upper(Ascii(c.name, sizeof(c.name))));
         s.str(L"hull", hull);
+        if (!name.empty()) s.str(L"name", name);
         s.flag(L"on", app.header->selected == i);
         s.close();
     }
@@ -1193,6 +1698,7 @@ std::wstring ConsoleState() {
         s.str(L"name", PresetName(i));
         s.str(L"key", L"F" + std::to_wstring(5 + i));
         s.flag(L"saved", g_presets[i].saved);
+        s.flag(L"fixed", i == kNightPreset);
         s.flag(L"active", PresetActive(i));
         s.close();
     }
@@ -1216,12 +1722,12 @@ std::wstring ConsoleState() {
     const double now = video::Now();
     s.open(L"vtr");
     s.flag(L"ok", g_rec.ok);
-    std::wstring l1, l2, counter = L"00:00:00", replayTime;
+    std::wstring l1, l2, counter = L"00:00:00", replayTime, speed;
     if (g_rec.replay && !g_rec.frames.empty()) {
         const double dur = g_rec.frames.back()->t - g_rec.frames.front()->t;
         replayTime = L"\x2212" + Hms(dur - g_rec.pos).substr(3);
-        l1 = L"REPLAY \x00B7 " + Upper(g_rec.replayLabel) + L" \x00B7 " + replayTime;
-        if (g_rec.speed != 1.0) l1 += g_rec.speed == 0.5 ? L" \x00B7 \x00BD SPEED" : L" \x00B7 \x00BC SPEED";
+        speed = SpeedLabel(g_rec.speed);
+        l1 = L"REPLAY \x00B7 " + Upper(g_rec.replayLabel) + L" \x00B7 " + replayTime + L" \x00B7 " + speed;
         if (g_rec.paused) l1 += g_rec.pos >= dur ? L" \x00B7 END" : L" \x00B7 PAUSED";
         counter = Hms(g_rec.pos);
     } else if (Recording()) {
@@ -1254,10 +1760,16 @@ std::wstring ConsoleState() {
     s.str(L"line1", l1);
     s.str(L"line2", l2);
     s.str(L"mode", g_rec.autoMode ? L"auto" : L"manual");
+    s.flag(L"composite", g_rec.composite);
+    s.str(L"autoFilter", kAutoFilterKey[g_rec.autoFilter]);
+    s.flag(L"noAcft", OwnAircraft() == 2);  // you have no aircraft: only ALL ACFT can record
     s.flag(L"rec", Recording());
     s.flag(L"play", g_rec.replay);
     s.str(L"replayTime", replayTime);
+    s.str(L"speed", speed);
     s.flag(L"canSave", g_rec.replay);
+    s.flag(L"canStill", g_rec.ok && StillReady());
+    if (const FolderStats* fs = VideoFolderStats()) s.str(L"folderInfo", FolderStatsText(*fs));
     s.close();
     // black box and stream
     s.open(L"bb");
@@ -1303,18 +1815,26 @@ std::wstring ConsoleState() {
             const auto st = t.pub.state();
             live += st == rtmp::Publisher::Live;
             retry = retry || st == rtmp::Publisher::Retrying;
-            wchar_t b[96];
-            if (st == rtmp::Publisher::Live) swprintf_s(b, L"%d \x00B7 %.1f MBIT/S", n + 1, StreamRate(n));
-            else swprintf_s(b, L"%d \x00B7 %s", n + 1, Upper(Utf8W(t.pub.text())).c_str());
+            wchar_t b[160];
+            std::wstring name = StreamIni(n, L"label");
+            if (name.empty()) name = L"Stream " + std::to_wstring(n + 1);
+            if (st == rtmp::Publisher::Live) swprintf_s(b, L"%s: live, %.1f Mbit/s", name.c_str(), StreamRate(n));
+            else swprintf_s(b, L"%s: %s", name.c_str(), Utf8W(t.pub.text()).c_str());
             text += (text.empty() ? L"" : L"\n") + std::wstring(b);
         }
         s.str(L"state", !on ? L"off" : retry ? L"retrying" : live == on ? L"live" : L"connecting");
-        if (on) s.str(L"text", text);
+        if (on) s.str(L"text", text);  // the LCD's tooltip
         s.open(L"targets", L'[');
         for (int n = 0; n < kStreams; ++n) {
+            const auto& t = g_streams[n];
             s.open(nullptr);
             s.flag(L"set", StreamConfigured(n));
-            s.str(L"state", word(g_streams[n]));
+            if (const std::wstring l = StreamIni(n, L"label"); !l.empty()) s.str(L"label", l);
+            s.str(L"state", word(t));
+            if (t.on) {  // the LCD: its rate while live, else its state in a word or two (CONNECTING, NO SERVER ...)
+                if (t.pub.state() == rtmp::Publisher::Live) s.num(L"rate", std::round(StreamRate(n) * 10) / 10);
+                s.str(L"msg", Utf8W(t.pub.shortText()));
+            }
             s.close();
         }
         s.close(L']');
@@ -1334,35 +1854,6 @@ void ConsolePush(bool force) {
 }
 
 // ---------------------------------------------------------------- commands from the page
-
-// Right-click on a preset: save / rename / clear (Night is fixed). The new name is asked for by the page.
-void ConsolePresetMenu(int slot) {
-    HMENU m = CreatePopupMenu();
-    if (slot == kNightPreset) {
-        AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"Night is a fixed preset");
-    } else {
-        AppendMenuW(m, MF_STRING, 1, (L"Save the current look to " + PresetName(slot)).c_str());
-        AppendMenuW(m, MF_STRING, 2, L"Rename\x2026");
-        AppendMenuW(m, MF_STRING | (g_presets[slot].saved ? 0 : MF_GRAYED), 3, L"Clear");
-    }
-    POINT p;
-    GetCursorPos(&p);
-    const int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON, p.x, p.y, 0, app.hwnd, nullptr);
-    DestroyMenu(m);
-    if (cmd == 1) {
-        StorePreset(slot);
-    } else if (cmd == 2 && g_con.web) {
-        Json a;
-        a.open(nullptr);
-        a.str(L"ask", L"rename");
-        a.num(L"index", slot);
-        a.str(L"name", g_presets[slot].name);
-        a.close();
-        g_con.web->PostWebMessageAsJson(a.j.c_str());
-    } else if (cmd == 3) {
-        ClearPreset(slot);
-    }
-}
 
 void ConsoleCommand(const std::wstring& j) {
     const std::wstring cmd = JsonStr(j, L"cmd");
@@ -1396,7 +1887,7 @@ void ConsoleCommand(const std::wstring& j) {
     if (cmd == L"key") {
         double rep = 0;
         JsonNum(j, L"repeat", &rep);
-        if (JsonNum(j, L"vk", &n) && !(static_cast<int>(n) == 'N' && rep > 0.5)) HandleKey(static_cast<WPARAM>(n));
+        if (JsonNum(j, L"vk", &n) && !(KeyNoRepeat(static_cast<int>(n)) && rep > 0.5)) HandleKey(static_cast<WPARAM>(n));
     } else if (cmd == L"source") {  // {id, mon, toggle}: id "deck" = the DECK key; toggle: the key shown again = monitor off
         double mon = 0, toggle = 0;
         JsonNum(j, L"mon", &mon);
@@ -1441,6 +1932,37 @@ void ConsoleCommand(const std::wstring& j) {
             ConsoleNoteDeck(s);
             CameraReconcile();
         }
+    } else if (cmd == L"cycle") {  // a monitor's deck cycle: {mon, on} on / off; {mon, sel: "0,3,5"} the positions ticked;
+                                   // {mon, seconds} the interval
+        double mon = 0, on = 0, sec = 0;
+        JsonNum(j, L"mon", &mon);
+        const int u = mon > 0.5 ? 1 : 0;
+        DeckCycle& c = Cycle(u);
+        if (JsonNum(j, L"on", &on)) {
+            c.on = on > 0.5;
+            if (!c.on) CycleCancel(c);
+            c.at = -1;  // the interval starts now
+        }
+        if (j.find(L"\"sel\"") != std::wstring::npos) {
+            const std::wstring sel = JsonStr(j, L"sel");
+            std::vector<std::wstring> keys;
+            for (size_t a = 0; a <= sel.size();) {
+                size_t e = sel.find(L',', a);
+                if (e == std::wstring::npos) e = sel.size();
+                const int k = e > a ? _wtoi(sel.substr(a, e - a).c_str()) : -1;
+                if (k >= 0 && k < CameraCount() - g_firstPos) keys.push_back(SourceKey(PositionSource(k)));
+                a = e + 1;
+            }
+            // positions not in the list now (DCS offers fewer) stay ticked for when they are back
+            for (const auto& x : c.keys)
+                if (!IsDeckSource(ConsoleSourceOf(x))) keys.push_back(x);
+            c.keys = keys;
+        }
+        if (JsonNum(j, L"seconds", &sec) && sec > 0) {
+            c.seconds = std::clamp(sec, kCycleMinSeconds, kCycleMaxSeconds);
+            c.at = -1;
+        }
+        CycleSave(u);
     } else if (cmd == L"preview") {  // {slot, id}: a preview's source ("" = none, "deck" = a deck position)
         if (!JsonNum(j, L"slot", &n)) return;
         const int k = std::clamp(static_cast<int>(n), 0, 3);
@@ -1527,12 +2049,19 @@ void ConsoleCommand(const std::wstring& j) {
         const int i = std::clamp(static_cast<int>(n), 0, kPresets - 1);
         if (save > 0.5) StorePreset(i);
         else LoadPreset(i);
-    } else if (cmd == L"presetMenu" && JsonNum(j, L"index", &n)) {
-        ConsolePresetMenu(std::clamp(static_cast<int>(n), 0, kPresets - 1));
+    } else if (cmd == L"presetClear" && JsonNum(j, L"index", &n)) {  // the page's right-click menu (and rename)
+        ClearPreset(std::clamp(static_cast<int>(n), 0, kPresets - 1));
+    } else if (cmd == L"keys" && JsonNum(j, L"page", &n)) {  // a pop-up or dialog in the page: it takes the keys
+        g_con.pageKeys = n > 0.5;
+        if (g_con.pageKeys && g_con.controller) g_con.controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     } else if (cmd == L"rename" && JsonNum(j, L"index", &n)) {
         RenamePreset(std::clamp(static_cast<int>(n), 1, kPresets - 1), JsonStr(j, L"name").substr(0, 10));
     } else if (cmd == L"mode" && JsonNum(j, L"auto", &n)) {
         SetAutoMode(n > 0.5);
+    } else if (cmd == L"comp") {
+        SetRecComposite(!g_rec.composite);
+    } else if (cmd == L"autoFilter") {  // {value: 'own' | 'section' | 'flight' | 'all'}
+        SetAutoFilter(AutoFilterFromKey(JsonStr(j, L"value").c_str()));
     } else if (cmd == L"rec") {
         ToggleRecording();
     } else if (cmd == L"play") {
@@ -1542,6 +2071,8 @@ void ConsoleCommand(const std::wstring& j) {
         else RecStopManual();
     } else if (cmd == L"save") {
         ReplaySave();
+    } else if (cmd == L"still") {
+        StillTake();
     } else if (cmd == L"folder") {
         OpenVideoFolder();
     } else if (cmd == L"bb") {
@@ -1559,6 +2090,11 @@ void ConsoleCommand(const std::wstring& j) {
         ++g_con.formRev;
         g_con.formMessage.clear();
         g_con.formRestart = false;
+    } else if (cmd == L"guide") {  // the title bar's "?"
+        OpenGuide();
+    } else if (cmd == L"benchLamp") {  // the benchmark lamp after a run: its report, and the lamp goes out
+        BenchLampClick();
+        ConsolePush();
     } else if (cmd == L"settingsClose") {
         g_con.settingsOpen = false;
     } else if (cmd == L"settingsSave") {
@@ -1573,10 +2109,12 @@ void ConsoleCommand(const std::wstring& j) {
         StepCarrier(n < 0 ? -1 : 1);
     } else if (cmd == L"ptzTarget") {  // {cam, target}: what AUTO follows
         const int s = ConsoleSourceOf(JsonStr(j, L"cam"));
-        if (s < kFeeds || !JsonNum(j, L"target", &n) || n < kTrackFirst || n > kTrackLast) return;
+        if (s < kFeeds || IsHangar(s - kFeeds) || !JsonNum(j, L"target", &n) || n < kTrackFirst || n > kTrackLast) return;
         TrackOf(s - kFeeds).target = static_cast<int>(n);
         SaveTrack(s - kFeeds);
         ConsolePush();
+    } else if (cmd == L"tune" || cmd == L"tuneStep" || cmd == L"tuneReset" || cmd == L"tuneCopy") {  // tuning.inc
+        TuneCommand(cmd, j, cmd == L"tuneStep" ? -1 : ConsoleSourceOf(JsonStr(j, L"cam")));
     } else if (cmd == L"ptzFlir") {  // experimental: this camera's picture in DCS's infrared (FLIR) or normal
         const int s = ConsoleSourceOf(JsonStr(j, L"cam"));
         if (!g_expFlir || s < kFeeds || s - kFeeds >= 16) return;
@@ -1586,6 +2124,7 @@ void ConsoleCommand(const std::wstring& j) {
         // the joystick (rates for the DLL, stamped: stale after 0.3 s); REST = back to the rest view and stay there;
         // AUTO = back to the rest view and follow the target (ptzReset: the rest view, AUTO as it was)
         const int s = ConsoleSourceOf(JsonStr(j, L"cam"));
+        if (cmd == L"ptzAuto" && s >= kFeeds && IsHangar(s - kFeeds)) return;  // a hangar position never tracks
         if (s >= kFeeds && (cmd == L"ptzRest" || cmd == L"ptzAuto")) {
             TrackOf(s - kFeeds).armed = cmd == L"ptzAuto";
             SaveTrack(s - kFeeds);
@@ -1595,6 +2134,7 @@ void ConsoleCommand(const std::wstring& j) {
         auto& c = app.headerW->ptz[slot];
         double p = 0, t = 0, z = 0;
         if (cmd == L"ptz") JsonNum(j, L"pan", &p), JsonNum(j, L"tilt", &t), JsonNum(j, L"zoom", &z);
+        if (cmd == L"ptz" && (p != 0 || t != 0 || z != 0)) CycleHold(s, video::Now());  // a cycle on its monitor stays
         c.pan = static_cast<float>(std::clamp(p, -1.0, 1.0));
         c.tilt = static_cast<float>(std::clamp(t, -1.0, 1.0));
         c.zoom = static_cast<float>(std::clamp(z, -1.0, 1.0));
@@ -1676,9 +2216,9 @@ LRESULT ConsoleHitTest(POINT screen) {
     return in(L"titlebar") && !in(L"winbtns") ? HTCAPTION : HTCLIENT;
 }
 
-// The console window's own placement ([console] x, y, w, h, max); the classic window keeps [window].
+// The console window's placement ([console] x, y, w, h, max).
 void ConsoleSavePlacement() {
-    if (IsIconic(app.hwnd) || !app.snapshotPath.empty() || g_uiSelftest || g_test.offscreen) return;
+    if (IsIconic(app.hwnd) || g_test.offscreen) return;
     const bool zoomed = IsZoomed(app.hwnd) != 0;
     WritePrivateProfileStringW(L"console", L"max", zoomed ? L"1" : L"0", app.iniPath.c_str());
     if (zoomed) return;
@@ -1713,48 +2253,19 @@ void ConsoleRestorePlacement(bool* maximise) {
     SetWindowPos(app.hwnd, nullptr, left, top, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// Console on / off (at start; the development tests use the classic window). The window's swap chain changes kind, so the
-// device is rebuilt (Update does it on the next loop, as after a driver reset).
-void ConsoleActivate(bool on) {
-    if (on == g_con.on) return;
-    if (on && !g_con.dcomp && !ConsoleStart()) return;  // cannot start: stays classic
-    if (app.hwnd && IsWindowVisible(app.hwnd)) {
-        if (g_con.on) ConsoleSavePlacement();
-        else SaveWindowPlacement();
-    }
-    g_con.on = on;
-    if (g_con.target) g_con.target->SetRoot(on ? g_con.root : nullptr);
-    if (g_con.controller) g_con.controller->put_IsVisible(on ? TRUE : FALSE);
-    if (g_con.dcomp) g_con.dcomp->Commit();
-    if (app.dev) CloseDevice();
-    g_con.rects.clear();
-    g_con.lastState.clear();
-    if (on) {
-        // the console has no ADJ switch (removed 2026-11-14): every picture's adjustments are on in it
-        if (!app.set.enabled) {
-            app.set.enabled = true;
-            Changed();
-        }
-        for (auto& gs : g_groupSet) gs.enabled = true;
-        ShowWindow(app.video, SW_HIDE);
-        ShowWindow(app.sidebar, SW_HIDE);
-        bool max = false;
-        if (IsZoomed(app.hwnd)) ShowWindow(app.hwnd, SW_RESTORE);
-        ConsoleRestorePlacement(&max);
-        if (max && IsWindowVisible(app.hwnd)) ShowWindow(app.hwnd, SW_MAXIMIZE);
-        if (g_con.ready) {
-            ConsolePush(true);
-            if (g_con.web) g_con.web->ExecuteScript(L"document.querySelector('ilarts-console')._rectSig='';document.querySelector('ilarts-console')._layout()", nullptr);
-        }
-    } else {
-        ShowWindow(app.video, SW_SHOW);
-        if (IsZoomed(app.hwnd)) ShowWindow(app.hwnd, SW_RESTORE);
-        RestoreWindowPlacement();
-        ApplyAspect(true);
-        if (g_test.offscreen) SetWindowPos(app.hwnd, nullptr, -6000, 50, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-    LayoutChildren();
-    UpdateTitle();
+// Starts the console, once, before the window is shown: the DirectComposition tree, the WebView (created
+// asynchronously) and the window's placement. False: it cannot start (ILARTS says so and closes).
+bool ConsoleActivate() {
+    if (!ConsoleStart()) return false;
+    g_con.on = true;
+    g_con.target->SetRoot(g_con.root);
+    g_con.dcomp->Commit();
+    // the console has no ADJ switch (removed 2026-11-14): every picture's adjustments are on
+    app.set.enabled = true;
+    for (auto& gs : g_groupSet) gs.enabled = true;
+    ConsoleRestorePlacement(nullptr);  // maximised: wWinMain shows it so
+    ConsoleResize();
+    return true;
 }
 
 // ---------------------------------------------------------------- tests

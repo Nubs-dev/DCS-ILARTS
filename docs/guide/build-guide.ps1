@@ -1,6 +1,6 @@
 # Prints docs\guide\guide.html to docs\DCS-ILARTS-Guide.pdf with Microsoft Edge (headless).
-#   powershell -ExecutionPolicy Bypass -File docs\guide\build-guide.ps1 -Version 1.0.26
-param([string]$Version = '1.0.26')
+#   powershell -ExecutionPolicy Bypass -File docs\guide\build-guide.ps1 -Version 1.0.27
+param([string]$Version = '1.0.27')
 $ErrorActionPreference = 'Stop'
 $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1

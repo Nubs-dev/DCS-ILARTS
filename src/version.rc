@@ -1,0 +1,34 @@
+// The version resource shared by ILARTS.dll, ILARTS.exe and ILARTSCam.dll: Explorer's Properties > Details, and
+// what deploy/package.ps1 checks against its -Version. The including .rc defines ILARTS_FILE_DESC,
+// ILARTS_FILE_NAME and ILARTS_FILE_TYPE (VFT_APP or VFT_DLL) first.
+#include <winver.h>
+#include "ilarts_version.h"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION ILARTS_VERSION_BIN
+ PRODUCTVERSION ILARTS_VERSION_BIN
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE ILARTS_FILE_TYPE
+ FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Nubs"
+            VALUE "FileDescription", ILARTS_FILE_DESC
+            VALUE "FileVersion", ILARTS_VERSION
+            VALUE "InternalName", ILARTS_FILE_NAME
+            VALUE "LegalCopyright", "Copyright (c) 2026 Nubs. MIT License."
+            VALUE "OriginalFilename", ILARTS_FILE_NAME
+            VALUE "ProductName", "DCS ILARTS"
+            VALUE "ProductVersion", ILARTS_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

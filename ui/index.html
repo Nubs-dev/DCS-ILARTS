@@ -18,7 +18,7 @@ ilarts-console { display: block; }
 <script src="ilarts-console.js"></script>
 <script>
 // Bridge between the element and ILARTS.exe (viewer/console.inc):
-//   ILARTS.exe -> page: the application's state (an object for el.state), { ask: 'rename', index, name } or
+//   ILARTS.exe -> page: the application's state (an object for el.state) or
 //                       { field: { key, value } } (a settings field the application filled in, e.g. a folder)
 //   page -> ILARTS.exe: the element's commands as they are, plus { cmd: 'ready' } and { cmd: 'key', vk }
 (function () {
@@ -31,11 +31,6 @@ ilarts-console { display: block; }
     const d = e.data;
     if (!d || typeof d !== 'object') return;
     if (d.field) { el.setSettingsField(d.field.key, d.field.value); return; }  // e.g. the folder picked
-    if (d.ask === 'rename') {
-      const name = window.prompt('Name for preset ' + d.index + ' (empty = "' + d.index + '"):', d.name || '');
-      if (name !== null) send({ cmd: 'rename', index: d.index, name: name.slice(0, 10) });
-      return;
-    }
     el.state = d;
   });
   // Keys: the application's keyboard shortcuts. Keys with Ctrl or Alt, function keys, arrows and Esc reach the
@@ -43,12 +38,12 @@ ilarts-console { display: block; }
   // takes typed input, so the page itself never acts on a key (no scrolling, no button presses by Space / Enter).
   const typing = e => { const t = e.composedPath()[0]; return !!t && /^(INPUT|SELECT|TEXTAREA|OPTION)$/.test(t.tagName); };
   document.addEventListener('keydown', e => {
-    if (el.modalOpen || typing(e)) return;  // the settings dialog: keys are for its fields (Esc closes it)
+    if (el.popupOpen || typing(e)) return;  // a dialog, menu or list: keys are for it (Esc closes it)
     e.preventDefault();
     if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
     send({ cmd: 'key', vk: e.keyCode, shift: e.shiftKey, repeat: e.repeat });
   }, true);
-  document.addEventListener('keyup', e => { if (!el.modalOpen && !typing(e)) e.preventDefault(); }, true);
+  document.addEventListener('keyup', e => { if (!el.popupOpen && !typing(e)) e.preventDefault(); }, true);
   // Buttons never take the keyboard focus (a focused button would react to Space / Enter).
   document.addEventListener('mousedown', e => { if (e.button !== 1 && !typing(e)) e.preventDefault(); }, true);
   send({ cmd: 'ready' });

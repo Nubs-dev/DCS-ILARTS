@@ -5,6 +5,8 @@
 #include "compat.h"
 #include "engine.h"
 #include "extra_cams.h"
+#include "own_canopy.h"
+#include "plat_cam.h"
 #include "share.h"
 
 #include <windows.h>
@@ -42,6 +44,12 @@ constexpr double kMatchMetres = 50.0;    // view camera within this of the PLAT 
 constexpr double kCarrierMetres = 600.0;
 constexpr double kExtraCamMetres = 10.0;
 constexpr int kMaxSwapped = 8;
+// Render graph collection entries at most (54 with the PLAT alone, about 6 more per extra camera; was 64,
+// which a few cameras exceeded and the far-view origin patch then skipped silently).
+constexpr size_t kMaxEntries = 256;
+// Return address of the view setup call for picture sources (cockpit TV displays, PLAT, extra cameras):
+// buildRenderGraph's loop over DCSFrameDesc+0x1078 (0x330 bytes each) calls +0x14940 at +0x24FBE.
+constexpr uintptr_t kExtraViewSetupRet = 0x24FC3;
 // Only replace when the main camera is this far from the PLAT. NOT a precision threshold: while the main
 // view also draws the carrier, the PLAT's carrier (LOD 0, placed relative to the PLAT origin) shows up
 // in the main view next to the player's camera, flickering (run 2026-11-10 02:5x, player 2-13 km away).
@@ -197,7 +205,7 @@ void PatchArray(const char* graph, size_t beginOff, size_t stride, PatchStat& st
     unsigned char* range[2];
     if (!SafeRead(graph + beginOff, range, sizeof(range)) || !range[0] || range[1] < range[0]) return;
     size_t bytes = static_cast<size_t>(range[1] - range[0]);
-    if (bytes % stride != 0 || bytes / stride > 64) return;
+    if (bytes % stride != 0 || bytes / stride > kMaxEntries) return;
     for (unsigned char* e = range[0]; e < range[1]; e += stride) {
         InterlockedIncrement64(&seen);
         if (IsPlatRegion(e, stride)) PatchRegion(e, stride, st);
@@ -223,7 +231,7 @@ void DumpArray(const char* tag, const char* graph, size_t beginOff, size_t strid
     unsigned char* range[2];
     if (!SafeRead(graph + beginOff, range, sizeof(range)) || !range[0] || range[1] < range[0]) return;
     size_t bytes = static_cast<size_t>(range[1] - range[0]);
-    if (bytes % stride != 0 || bytes / stride > 64) return;
+    if (bytes % stride != 0 || bytes / stride > kMaxEntries) return;
     int index = 0, plat = 0;
     bool mainDone = false;
     for (unsigned char* e = range[0]; e < range[1]; e += stride, ++index) {
@@ -248,6 +256,7 @@ void BuildWrap(void* self, const void* desc) {
     g_swappedN = 0;
     ReleaseSRWLockExclusive(&g_swapLock);
     g_buildFn(self, desc);
+    OwnCanopyBuildEnd(self ? static_cast<const char*>(self) + kGraphOffset : nullptr);
     if (!self) return;
     if (g_swappedN > g_swapPeak) g_swapPeak = g_swappedN;
     static ULONGLONG s_swapLogTick = 0;
@@ -296,6 +305,24 @@ void BuildWrap(void* self, const void* desc) {
 uint64_t Wrap(void* view, const void* cam, const double* origin, void* a4, uint64_t a5, uint64_t a6, uint64_t a7,
               uint64_t a8) {
     InterlockedIncrement64(&g_calls);
+    if (cam && g_srBase && reinterpret_cast<uintptr_t>(_ReturnAddress()) - g_srBase == kExtraViewSetupRet) {
+        // A picture source's view (cockpit TV displays, the PLAT, the extra cameras). The PLAT's and the extra
+        // cameras' are ILARTS's views: own_canopy.h draws your aircraft there as seen from outside.
+        auto c = reinterpret_cast<const double*>(static_cast<const char*>(cam) + kCamPosOffset);
+        bool ours = ExtraCamsNear(c, kExtraCamMetres);
+        double synth[16];
+        if (!ours && PlatCamPose(synth)) {
+            // the synthetic PLAT camera's pose of this frame (the hook's PLAT position is refreshed once a second)
+            const double dx = c[0] - synth[12], dy = c[1] - synth[13], dz = c[2] - synth[14];
+            ours = dx * dx + dy * dy + dz * dz < kMatchMetres * kMatchMetres;
+        }
+        if (!ours && GetTickCount64() - g_pTick.load(std::memory_order_relaxed) < kStaleMs) {
+            const double dx = c[0] - g_px.load(std::memory_order_relaxed), dy = c[1] - g_py.load(std::memory_order_relaxed),
+                         dz = c[2] - g_pz.load(std::memory_order_relaxed);
+            ours = dx * dx + dy * dy + dz * dz < kMatchMetres * kMatchMetres;
+        }
+        if (ours) OwnCanopyNoteView(c);
+    }
     if (cam && origin && GetTickCount64() - g_pTick.load(std::memory_order_relaxed) < kStaleMs) {
         auto c = reinterpret_cast<const double*>(static_cast<const char*>(cam) + kCamPosOffset);
         const double plat[3] = {g_px.load(std::memory_order_relaxed), g_py.load(std::memory_order_relaxed),

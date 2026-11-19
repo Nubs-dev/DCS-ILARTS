@@ -64,10 +64,15 @@ Track g_track[kExtraCams];
 // when zoomed in), zoom by up to kManZoom e-folds per second. Moving the stick takes the camera off automatic
 // tracking until the viewer's reset; after the reset pan returns as when tracking ends, tilt and zoom ease back.
 constexpr double kManPan = 45 * 3.14159265358979323846 / 180, kManTilt = 30 * 3.14159265358979323846 / 180, kManZoom = 0.9;
+// Tracking a target that will outrun the pan head (ptz.h PanAhead): how far ahead its course is followed (s),
+// and how far off, as a share of half the picture's width, it may get before a move must be under way. Tuned
+// offline on traps past the island camera (48 deg, 60 deg/s, 0.3 s ramp): the aircraft stays within ~13 deg
+// right / ~19 deg left of the aim (24 deg = the edge); before, it reached ~37 deg as it passed the island.
+constexpr double kAheadS = 1.0, kOutrun = 0.6;
 struct Aim {
     bool init = false;
     PanState pan;
-    double rest[6] = {};  // the pos / look the state belongs to (a new rest view is taken at once)
+    double rest[7] = {};  // the pos / look / fov the state belongs to (a new rest view is taken at once, off the joystick)
     double last = 0;
     double tilt = 0, fov = 0;  // rad; the rest view's unless under manual control or easing back
     bool manual = false, ptzInit = false;
@@ -196,9 +201,10 @@ void Inject(const void* platDesc, unsigned mask) {
         const double rx = c.look[0] - c.pos[0], ry = c.look[1] - c.pos[1], rz = c.look[2] - c.pos[2];
         const double restPan = atan2(rz, rx), restTilt = atan2(ry, sqrt(rx * rx + rz * rz));
         Aim& a = g_aim[i];
-        double restNow[6];
+        double restNow[7];
         memcpy(restNow, c.pos, sizeof(c.pos));
         memcpy(restNow + 3, c.look, sizeof(c.look));
+        restNow[6] = c.fov;
         if (!a.init || memcmp(restNow, a.rest, sizeof(restNow)) != 0) {
             memcpy(a.rest, restNow, sizeof(restNow));
             a.pan = PanState{};
@@ -233,12 +239,24 @@ void Inject(const void* platDesc, unsigned mask) {
             a.fov = std::min(std::min(c.fov * 1.6, 100 * kDeg), std::max(2 * kDeg, a.fov * exp(-jz * kManZoom * dt)));
         } else {
             double targetPan = restPan;
+            PanAhead ahead;
             if (tracking) {
                 const double lead = std::min(age, 0.5);
                 const double tx = tr.p[0] + tr.v[0] * lead - c.pos[0], tz = tr.p[2] + tr.v[2] * lead - c.pos[2];
-                if (tx * tx + tz * tz > 1.0) targetPan = atan2(tz, tx);
+                if (tx * tx + tz * tz > 1.0) {
+                    targetPan = atan2(tz, tx);
+                    // where it is heading over the next second (constant velocity), and how far off it may get
+                    // before a move must already be under way: kOutrun of the half picture
+                    ahead.n = static_cast<int>(kAheadS / ahead.step + 0.5);
+                    for (int k = 0; k < ahead.n; ++k) {
+                        const double t = (k + 1) * ahead.step;
+                        ahead.bearing[k] = atan2(tz + tr.v[2] * t, tx + tr.v[0] * t);
+                    }
+                    ahead.outrun = kOutrun * c.fov / 2;
+                }
             }
-            PanStep(a.pan, targetPan, tracking ? c.panDeadband : 0.0, c.panRate, c.panRamp, dt, tracking ? c.panOnly : 0);
+            PanStep(a.pan, targetPan, tracking ? c.panDeadband : 0.0, c.panRate, c.panRamp, dt, tracking ? c.panOnly : 0,
+                    ahead.n > 0 ? &ahead : nullptr);
             const double k = std::min(1.0, dt / 0.4);  // tilt and zoom ease back to the rest view
             a.tilt += (restTilt - a.tilt) * k;
             a.fov += (c.fov - a.fov) * k;

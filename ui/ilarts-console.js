@@ -21,15 +21,17 @@
 // always goes under the monitors. No framework, no build step.
 (function () {
   // lamps in the keycaps (lit, dark) and panel LEDs
+  // the VTR's ACFT key: whose approaches AUTO records, in the order the key steps through them
+  const ACFT = ['own', 'section', 'flight', 'all'], ACFT_LCD = { own: 'MY ACFT', section: 'MY SECTION', flight: 'MY FLIGHT', all: 'ALL ACFT' };
   const LAMP = { red: ['#FF4A3D', '#5A2A27'], green: ['#62E06B', '#29452B'], amber: ['#FFB547', '#5A4520'], white: ['#F6F8FF', '#55595F'] };
   const LED = { red: ['#E0524E', '#3A2222'], green: ['#5FD068', '#1E2E20'], amber: ['#E7B04F', '#2E2716'] };
-  // knob: label, min, max, step, format, wheel steps per notch. A host can override min / max / step and ask
+  // knob: label, min, max, step, format, wheel steps per notch, default (a double-click returns to it). A host can override min / max / step and ask
   // for a logarithmic sweep with state.knobs = { con: { min: 0.25, max: 16, log: true } }.
   const KNOBS = {
-    exp: ['Exposure', -3, 3, 0.05, x => (x >= 0 ? '+' : '') + x.toFixed(2) + ' EV', 2],
-    bri: ['Brightness', -1, 1, 0.01, x => (x >= 0 ? '+' : '') + x.toFixed(2), 2],
-    con: ['Contrast', 0.5, 2, 0.01, x => '×' + x.toFixed(2), 2],
-    gam: ['Gamma', 0.5, 2, 0.01, x => x.toFixed(2), 2],
+    exp: ['Exposure', -3, 3, 0.05, x => (x >= 0 ? '+' : '') + x.toFixed(2) + ' EV', 2, 0],
+    bri: ['Brightness', -1, 1, 0.01, x => (x >= 0 ? '+' : '') + x.toFixed(2), 2, 0],
+    con: ['Contrast', 0.5, 2, 0.01, x => '×' + x.toFixed(2), 2, 1],
+    gam: ['Gamma', 0.5, 2, 0.01, x => x.toFixed(2), 2, 1],
   };
   const TICKS = Array.from({ length: 11 }, (_, i) => {
     const a = (-135 + i * 27) * Math.PI / 180, s = Math.sin(a), c = -Math.cos(a);
@@ -60,8 +62,15 @@
 .row{display:flex;align-items:center;gap:6px}
 .col{display:flex;flex-direction:column;gap:6px}
 .sp{flex:1}
-.lcd{display:inline-block;font-size:12px;font-weight:600;color:#7FC77A;background:#0A100B;border:1px solid #2E3B30;border-radius:2px;padding:3px 7px;text-align:center;letter-spacing:.04em;white-space:nowrap}
-.lcd.sm{font-size:10.5px;padding:2px 6px}
+.lcd{display:inline-block;box-sizing:border-box;height:19px;line-height:17px;font-size:10.5px;font-weight:600;color:#7FC77A;background:#0A100B;border:1px solid #2E3B30;border-radius:2px;padding:0 7px;text-align:center;letter-spacing:.04em;white-space:nowrap}
+.lcd.sm{font-size:10.5px;padding:0 6px}
+.lcd.lcd2{display:block;height:calc(2.9em + 8px);padding:3px 7px;text-align:left;line-height:1.45;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lcd[hidden]{display:none}
+.vtr .lcd.lcd2{height:40px;line-height:16px;padding:3px 7px}
+.vtr .lcd.acft{grid-column:span 3;width:auto;text-align:center}
+.vtr .lcd.acft[hidden],.vtr .kc[hidden]{display:none}
+.vtr .lcd.acft .no{color:#E7B04F}
+.vsep{width:1px;align-self:stretch;flex:none;background:#3A4148;box-shadow:1px 0 0 rgba(255,255,255,.04)}
 .led{display:inline-block;width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.5);flex:none}
 .hint{font-size:8.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#7D8690;line-height:1.45}
 /* keycaps: light, with a lamp window that lights when the mode is active */
@@ -74,6 +83,7 @@
 .kc.mini{height:24px;padding-top:6px;font-size:8px;letter-spacing:.1em}
 .kc.mini .lamp{top:3px;width:12px;height:3px;margin-left:-6px}
 .kc.w{width:auto;min-width:52px;padding-left:9px;padding-right:9px}
+.modal .kc.w:not(.sm){display:inline-flex;align-items:center;justify-content:center;width:66px;min-width:66px;flex:none;padding:0 6px 2px;line-height:1.15;text-align:center;white-space:normal}
 .kc .lamp{position:absolute;left:50%;top:5px;width:16px;height:5px;margin-left:-8px;border-radius:1.5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.45)}
 .kc .k{position:absolute;right:3px;top:1px;font-size:7.5px;font-weight:500;letter-spacing:0;opacity:.6}
 .kc:active{transform:translateY(1px)}
@@ -92,7 +102,7 @@
 .kn svg{cursor:ns-resize;outline:none}
 .kn.na{opacity:.38}
 .kn.na svg{cursor:default}
-.kn .lcd{font-size:10px;padding:1px 3px;min-width:54px}
+.kn .lcd{font-size:10px;padding:0 3px;min-width:54px}
 .scrn{position:relative;overflow:hidden;background:#050607;border-radius:3px;aspect-ratio:4/3}
 :host([native-video]){background:transparent}
 .ovroot{position:absolute;inset:0;overflow:hidden;border-radius:3px}
@@ -115,6 +125,11 @@ header>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:
 header>span:first-child{flex:none}
 header .wb{width:30px;height:26px;border:1px solid #2E343A;background:#1C2024;color:#C9D0D6;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
 header .wb.set{width:auto;gap:6px;padding:0 9px;font:600 9.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.12em}
+header .wb.help{font:600 13px 'IBM Plex Mono',Consolas,monospace}
+header .wb.bl[hidden]{display:none}
+header .wb.bl .lamp{display:block;width:14px;height:6px;border-radius:1.5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.45)}
+.info{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border:1px solid #444C54;border-radius:50%;background:#16191C;color:#AEB6BE;font:italic 600 10px 'IBM Plex Mono',Consolas,monospace;cursor:help;vertical-align:middle;flex:none}
+.sect.hl{border-color:#E7B04F;transition:border-color .2s}
 /* the stage: everything in it is placed by the solver (_fit) */
 .stage{position:relative;flex:1;min-height:0;background:#1E2226;overflow:hidden}
 .unit,.prevs,.rack{position:absolute;left:0;top:0}
@@ -142,7 +157,7 @@ div.tile{cursor:default}
 .rack>.blank{display:none;flex:1 1 0;min-width:0}
 .rack.fill>.blank{display:block}
 .pnl>.grp.in{flex:1 1 auto}
-.rack>.pnl[data-p=bb],.rack>.pnl[data-p=stream]{width:178px}
+.rack>.pnl[data-p=bb]{width:178px}
 .rack.side>.pnl{align-items:stretch}
 .measure .strip,.measure .rack{width:max-content!important;flex-wrap:nowrap!important}
 .strip>.grp,.rack>.pnl{zoom:var(--z,1)}
@@ -150,16 +165,18 @@ div.tile{cursor:default}
 .measure .rack>.blank{display:none!important}
 .measure .unit{width:max-content!important}
 .ship{display:flex;align-items:stretch;gap:4px}
-.ship .lcd{flex:1;display:flex;flex-direction:column;justify-content:center;gap:1px;cursor:pointer;width:150px;padding:3px 6px;text-align:left;font:inherit;font-family:'IBM Plex Mono',Consolas,monospace}
+.ship .lcd{flex:1;height:auto;line-height:normal;display:flex;flex-direction:column;justify-content:center;gap:1px;cursor:pointer;width:150px;padding:3px 6px;text-align:left;font:inherit;font-family:'IBM Plex Mono',Consolas,monospace}
 .ship .lcd b{font-size:13px;color:#8EE089}
 .ship .lcd span{font-size:9px;color:#5E9A5A;letter-spacing:.08em;overflow:hidden;text-overflow:ellipsis;max-width:138px}
 .ship.view .lcd{width:auto;min-width:0;flex-direction:row;align-items:center;justify-content:space-between;gap:8px}
 .ship.view .lcd b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ship:not(.view) .lcd{justify-content:center;gap:0;padding:3px 7px;font-size:10.5px;font-weight:600;line-height:1.45;letter-spacing:.04em;color:#7FC77A}
+.ship:not(.view) .lcd b,.ship:not(.view) .lcd span{font:inherit;color:inherit;letter-spacing:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:138px}
 .joy{position:relative;width:84px;height:84px;border-radius:6px;background:linear-gradient(#15181B,#0D0F11);border:1px solid #3A4148;box-shadow:inset 0 2px 6px rgba(0,0,0,.8);touch-action:none;cursor:grab;flex:none}
 .joy svg{width:100%;height:100%}
 .joy.on{cursor:grabbing}
 .joy.na{opacity:.35;cursor:default}
-.tgt{display:block;width:166px;padding:4px 7px;font-size:11px;text-align:left;overflow:hidden;text-overflow:ellipsis}
+.tgt{display:block;width:166px;padding:0 7px;font-size:10.5px;text-align:left;overflow:hidden;text-overflow:ellipsis}
 .grp.na .tgt{opacity:.45}
 .over{position:fixed;inset:0;pointer-events:none;z-index:10}
 .over>*{pointer-events:auto}
@@ -167,6 +184,33 @@ div.tile{cursor:default}
 .pop button{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;background:none;border:0;border-radius:3px;color:#C9D0D6;cursor:pointer;font:600 11px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.06em;text-align:left}
 .pop button:hover{background:#2A2F35}
 .pop button .h{color:#8EE089;min-width:64px}
+.pop button:disabled{color:#4F575F;background:none;cursor:default}
+.pop.menu{min-width:150px}
+.pop.tune{min-width:0;max-height:none;padding:8px 10px 10px;display:flex;flex-direction:column;gap:6px}
+.pop.tune .ph{padding:0 0 2px}
+.pop.tune .tr{display:flex;align-items:center;gap:5px}
+.pop.tune .tl{width:46px;flex:none}
+.pop.tune .lcd{width:76px;text-align:right}
+.pop.tune .lcd.ft{width:80px;color:#6FA36B}
+.pop.tune .kc{display:inline-flex;align-items:center;justify-content:center;width:30px;height:24px;padding:0 0 2px;font-size:14px}
+.pop.tune .kc.w{width:auto;min-width:46px;padding:0 8px 1px;font-size:9px}
+.pop.tune .sep{border-top:1px solid #2E343A;margin:2px 0}
+.pop.tune .alert{font:600 9.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.06em;color:#F29447;max-width:300px;white-space:normal}
+.pop .cb{position:relative;width:11px;height:11px;border:1px solid #5E6770;border-radius:2px;background:#0A100B;flex:none;box-sizing:border-box}
+.pop [aria-checked=true] .cb{background:#8EE089;border-color:#8EE089}
+.pop [aria-checked=true] .cb::after{content:'';position:absolute;left:3px;top:0;width:3px;height:6px;border:solid #0A100B;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.pop .ph{display:flex;align-items:center;gap:8px;padding:7px 8px 3px;font:600 9.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.14em;color:#7D8690}
+.pop .ph:not(:first-child){margin-top:4px;border-top:1px solid #2E343A;border-radius:0}
+.pop button.ph{font-size:9.5px;letter-spacing:.14em;color:#7D8690}
+.pop [aria-checked=mixed] .cb{border-color:#8EE089}
+.pop [aria-checked=mixed] .cb::after{content:'';position:absolute;left:2px;top:4px;width:5px;height:1px;border-top:1px solid #8EE089}
+.pop .cycint{display:flex;align-items:center;gap:8px;padding:7px 8px 4px;margin-top:4px;border-top:1px solid #2E343A}
+.pop .cycint .fld{width:58px;text-align:right}
+.fld.bad,.fld.bad:focus{border-color:#E0524E;color:#FF6B66}
+.pop.menu .warn:not(:disabled){color:#F29447}
+.modal .mbody>.fld{width:220px;font-size:13px;padding:6px 8px;text-transform:uppercase}
+.tip{position:fixed;z-index:20;pointer-events:none;max-width:300px;white-space:pre-line;padding:5px 8px;background:#1B1F23;border:1px solid #444C54;border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.6);color:#C9D0D6;font:500 10px/1.45 'IBM Plex Mono',Consolas,monospace;letter-spacing:.04em}
+.tip[hidden]{display:none}
 .back{position:fixed;inset:0;background:rgba(5,6,7,.62);display:flex;align-items:center;justify-content:center}
 .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:calc(100vw - 48px);max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:#1E2226;border:1px solid #4A525A;border-radius:6px;box-shadow:0 18px 50px rgba(0,0,0,.7)}
 .mhead .hint{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -184,7 +228,7 @@ div.tile{cursor:default}
 .mhead,.mfoot{display:flex;align-items:center;gap:8px;padding:10px 14px;flex:none}
 .mhead{border-bottom:1px solid #3A4148}
 .mfoot{border-top:1px solid #3A4148;flex-wrap:wrap}
-.mbody{flex:none;min-height:0;overflow:hidden;padding:12px 14px;display:flex;gap:12px;align-items:stretch}
+.mbody{flex:none;min-height:0;overflow:hidden;overflow-anchor:none;padding:12px 14px;display:flex;gap:12px;align-items:stretch}
 .mbody.scroll{overflow-x:hidden;overflow-y:auto}
 .mbody.measuring{display:block}
 .mbody.measuring .sect{margin-bottom:12px}
@@ -197,18 +241,19 @@ div.tile{cursor:default}
 .sect .rk{width:24px;height:34px}
 .sect .rk .i{top:5px;height:6px}
 .sect .rk .o{bottom:4px;width:7px;height:7px;margin-left:-3.5px}
-.frow{display:grid;grid-template-columns:minmax(110px,36%) minmax(0,1fr);align-items:center;gap:4px 10px}
+.frow{display:grid;grid-template-columns:minmax(0,1fr) 226px;align-items:center;gap:4px 10px}  /* every panel's fields in one column, as wide as the four stream target keys */
 .frow .hint{grid-column:2}
 .fld{width:100%;min-width:0;background:#0A100B;color:#8EE089;border:1px solid #2E3B30;border-radius:2px;padding:4px 6px;font-size:11.5px;font-weight:600;outline:none}
 .fld:focus{border-color:#5E9A5A}
 .fld[type=number]{appearance:textfield;-moz-appearance:textfield}
 .fld::-webkit-outer-spin-button,.fld::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 select.fld{appearance:auto}
+select.fld option{background:#0A100B;color:#8EE089}
 .unitx{font-size:9.5px;color:#7D8690;white-space:nowrap}
 .rs{color:#E7B04F;font-size:11px;margin-left:4px}
 .banner[hidden]{display:none}
 .kc.sm{height:28px;padding-top:0}
-.banner{margin:0 14px;padding:7px 10px;border-radius:3px;background:#2E2716;border:1px solid #6B5422;color:#E7B04F;font:600 10px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.08em;display:flex;align-items:center;gap:10px;white-space:pre-line;line-height:1.5}
+.banner{margin:10px 14px 0;padding:7px 10px;border-radius:3px;background:#2E2716;border:1px solid #6B5422;color:#E7B04F;font:600 10px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.08em;display:flex;align-items:center;gap:10px;white-space:pre-line;line-height:1.5}
 `;
 
   const SCREWS = '<i class="scr" style="left:5px;top:5px"></i><i class="scr" style="right:5px;top:5px"></i><i class="scr" style="left:5px;bottom:5px"></i><i class="scr" style="right:5px;bottom:5px"></i>';
@@ -225,7 +270,19 @@ select.fld{appearance:auto}
     return (code & 0x200 ? 'Ctrl+' : '') + (code & 0x100 ? 'Shift+' : '') + (code & 0x400 ? 'Alt+' : '') + (n || 'Key ' + vk);
   };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Deck positions in two groups: indices 0 .. n-1 -> [{head: 'FLIGHT DECK', g: 'flight'}, 0, 3, ..., {head: 'HANGAR DECK', g: 'hangar'}, ...]
+  // (hangar: a set of the indices on the hangar deck; an empty group gets no header)
+  const deckGroups = (n, hangar) => {
+    const out = [];
+    [['FLIGHT DECK', 'flight', false], ['HANGAR DECK', 'hangar', true]].forEach(([head, g, h]) => {
+      const m = [...Array(n).keys()].filter(i => hangar.has(i) === h);
+      if (m.length) out.push({ head, g }, ...m);
+    });
+    return out;
+  };
   // keycap: lamp = colour name or '' (momentary key, no lamp)
+  // a stream target's name on its key: its label (up to 6 characters), else its number
+  const stName = (t, n) => String((t && t.label) || '').trim().toUpperCase() || String(n + 1);
   const key = (attr, label, k, lamp, cls) => `<button class="kc${lamp ? '' : ' plain'}${cls ? ' ' + cls : ''}" ${attr}${lamp ? ` data-lamp="${lamp}"` : ''}>${lamp ? '<i class="lamp"></i>' : ''}${label}${k ? `<span class="k">${k}</span>` : ''}</button>`;
   const rocker = (attr, label) => `<button class="rk" ${attr} aria-label="${esc(label)}" aria-pressed="false"><span class="face"><i class="i"></i><i class="o"></i></span></button>`;
   const GEAR = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>';
@@ -289,6 +346,7 @@ select.fld{appearance:auto}
     }
     get state() { return this._state; }
     get modalOpen() { return !!this.shadowRoot.querySelector('.over .modal'); }
+    get popupOpen() { return !!(this._over && this._over.firstElementChild); }  // a dialog, or a pop-up list or menu
 
     // Web hosts: the element (a <video>, <img>, <canvas>) shown in monitor `id` ('program', 'second' or a source id).
     setVideo(id, element) {
@@ -335,13 +393,13 @@ select.fld{appearance:auto}
  <div class="bez"><div class="scrn" data-mon="${MONS[u]}">${native ? '' : MONOV(MONS[u])}</div>
   <div class="mplate"><span class="id">${u ? 'B' : 'A'}</span><span class="led" data-o="sig"></span><span class="eng" data-o="plate"></span><span class="sp"></span><span class="eng dim" data-o="res"></span><span class="tally" data-o="tally" title="The VTR is recording this picture">REC</span></div></div>
  <div class="strip">
-  <div class="grp" data-g="src"><div class="gh"><span class="plate">Source</span><span class="sp"></span>${key('data-b="recArm" title="The VTR records this source"', 'REC', '', 'red', 'mini')}</div><div class="row" data-l="srcs" style="gap:5px"></div>
+  <div class="grp" data-g="src"><div class="gh"><span class="plate">Source</span><span class="sp"></span>${key('data-b="cycle" title="Step through the ticked deck positions"', 'CYCLE', '', 'green', 'mini')}${key('data-b="cycleList" aria-label="Cycle positions and interval" style="width:22px;margin-left:-3px;padding-top:2px;font-size:13px"', '▾', '', '', 'mini')}${key('data-b="recArm" title="The VTR records this source"', 'REC', '', 'red', 'mini')}</div><div class="row" data-l="srcs" style="gap:5px"></div>
    <div class="ship view" data-l="view">${key('data-b="viewPrev" aria-label="Previous view"', '◀', '', '', 'arw')}<button class="lcd" data-b="viewList" aria-label="Choose the view"><b data-o="view"></b><span data-o="viewN"></span></button>${key('data-b="viewNext" aria-label="Next view"', '▶', '', '', 'arw')}</div></div>
   <div class="grp" data-g="lev"><div class="gh"><span class="plate">Levels &middot; <span data-o="group"></span></span><span class="sp"></span><span class="eng dim" style="font-size:8px">Auto</span><span class="lcd sm" data-o="autoRange"></span></div>
    <div class="row" style="align-items:flex-start;gap:6px"><div class="col" style="gap:5px">${key('data-b="auto"', 'AUTO', u ? '' : 'A', 'green')}${key('data-b="reset"', 'RESET', u ? '' : 'R', '', 'warn')}</div>${knob(u, 'exp')}${knob(u, 'bri')}${knob(u, 'con')}${knob(u, 'gam')}</div></div>
   <div class="grp" data-g="ptz"><div class="gh"><span class="plate">PTZ &middot; <span data-o="cam"></span></span></div>
    <div class="row" style="align-items:flex-start;gap:8px"><div class="joy" data-joy title="Drag: pan / tilt · hold left: zoom in · hold right: zoom out · wheel: zoom">${JOY(u)}</div>
-   <div class="col" style="gap:6px;align-items:flex-start"><div class="row" style="gap:5px">${key('data-b="ptzRest" title="Back to the rest view, and stay there"', 'REST', '', '')}${key('data-b="ptzAuto" title="Back to the rest view, then follow the target"', 'AUTO', '', 'green')}${key('data-b="ptzTarget" title="What AUTO follows (next)"', 'TARGET', '', '')}${key('data-b="ptzFlir" title="Experimental: DCS\'s infrared picture for this camera. Costs DCS frame rate" hidden', 'FLIR', '', 'amber')}</div><span class="lcd tgt" data-o="target"></span></div></div></div>
+   <div class="col" style="gap:6px;align-items:flex-start"><div class="row" style="gap:5px">${key('data-b="ptzRest" title="Back to the rest view, and stay there"', 'REST', '', '')}${key('data-b="ptzAuto" title="Back to the rest view, then follow the target"', 'AUTO', '', 'green')}${key('data-b="ptzTarget" title="What AUTO follows (next)"', 'TARGET', '', '')}${key('data-b="ptzFlir" title="Experimental: DCS\'s infrared picture for this camera. Costs DCS frame rate" hidden', 'FLIR', '', 'amber')}${key('data-b="ptzTune" title="Camera tuning: position, aim and field of view in DCS" hidden', 'TUNE', '', 'amber')}</div><span class="lcd tgt" data-o="target"></span></div></div></div>
  </div>
 </section>`;
       this.shadowRoot.innerHTML = `<style>${CSS}</style>
@@ -352,6 +410,8 @@ select.fld{appearance:auto}
   <div class="sp" data-drag></div>
   <span class="lcd" data-t="status"></span>
   <div class="winbtns" style="display:flex;gap:4px">
+   <button class="wb bl" data-b="benchLamp" aria-label="Benchmark" hidden><i class="lamp"></i></button>
+   <button class="wb help" data-b="guide" aria-label="User guide" title="User guide">?</button>
    <button class="wb set" data-b="settings" aria-label="Settings">${GEAR}SETTINGS</button>
    <span class="wbx" style="display:flex;gap:4px">
    <button class="wb" data-win="min" aria-label="Minimise"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 9h8" stroke="currentColor" stroke-width="1.5"></path></svg></button>
@@ -379,13 +439,16 @@ select.fld{appearance:auto}
     <span class="hint" data-t="presetHint" style="width:247px;height:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></span>
    </div>
    <div class="pnl" data-p="vtr">${SCREWS}
-    <div class="row"><span class="plate">VTR remote</span><div class="sp"></div><span class="lcd" data-t="counter" style="min-width:84px"></span></div>
-    <div class="row" style="align-items:flex-start;gap:10px">
-     <div class="col" style="gap:7px">
-      <div class="lcd" style="display:block;text-align:left;line-height:1.45;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:310px"><span data-t="vtr1"></span><br><span data-t="vtr2"></span></div>
-      <div class="row" style="gap:4px" title="The sources the VTR records (one file each)"><span class="eng dim" style="font-size:8px;width:26px;line-height:1.25">REC<br>SRC</span><div class="row" data-l="recs" style="gap:5px"></div></div>
+    <div class="row"><span class="plate">VTR remote</span><div class="sp"></div><span class="lcd sm" data-t="folderInfo" hidden></span><span class="lcd" data-t="counter" style="min-width:84px"></span></div>
+    <div class="row vtr" style="align-items:stretch;gap:12px">
+     <div class="col" style="gap:5px;min-width:250px">
+      <div class="lcd lcd2" style="width:0;min-width:100%"><span data-t="vtr1"></span><br><span data-t="vtr2"></span></div>
+      <div class="row" style="gap:5px"><span class="eng dim" style="font-size:8px;width:26px;line-height:1.25" title="The sources the VTR records">REC<br>SRC</span><div class="row" data-l="recs" style="gap:5px"></div><span class="vsep" style="margin:0 3px"></span>${key('data-b="comp" title="Composite: the REC sources in one picture, one file and one still"', 'COMP', '', 'amber')}</div>
      </div>
-     <div style="display:grid;grid-template-columns:repeat(4,52px);gap:5px">${key('data-b="manual"', 'MAN', '', 'amber')}${key('data-b="automode"', 'AUTO', 'M', 'amber')}${key('data-b="rec"', '● REC', 'V', 'red')}${key('data-b="play"', '▶ PLAY', 'SPC', 'white')}${key('data-b="stop"', '■ STOP', '', '')}${key('data-b="save"', 'SAVE', 'S', '')}${key('data-b="folder"', 'FOLDER', '', '', 'w" style="grid-column:span 2;width:auto')}</div>
+     <span class="vsep"></span>
+     <div style="display:grid;grid-template-columns:repeat(3,52px);gap:5px"><span class="lcd lcd2 acft" data-l="acft"><span data-t="acft"></span><br><span class="no" data-t="noAcft"></span></span>${key('data-b="manual"', 'MAN', '', 'amber')}${key('data-b="automode"', 'AUTO', 'M', 'amber')}${key('data-b="acft" data-l="acft" title="Whose approaches AUTO records (next)"', 'ACFT', '', '')}</div>
+     <span class="vsep"></span>
+     <div style="display:grid;grid-template-columns:repeat(3,52px);gap:5px">${key('data-b="rec"', '● REC', 'V', 'red')}${key('data-b="play"', '▶ PLAY', 'SPC', 'white')}${key('data-b="stop"', '■ STOP', '', '')}${key('data-b="save"', 'SAVE', 'S', '')}${key('data-b="still"', 'STILL', 'P', '')}${key('data-b="folder"', 'FOLDER', '', '')}</div>
     </div>
    </div>
    <div class="pnl" data-p="bb">${SCREWS}
@@ -395,14 +458,13 @@ select.fld{appearance:auto}
    </div>
    <div class="pnl" data-p="stream">${SCREWS}
     <div class="row"><span class="plate">Stream</span></div>
-    <div class="row" style="gap:10px">${rocker('data-b="stream"', 'Stream')}<span class="led" data-led="stream"></span><span class="eng" data-t="streamWord" style="font-size:9px"></span></div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px">${[0, 1, 2, 3].map(n => key(`data-stn="${n}" aria-label="Stream ${n + 1}"`, String(n + 1), '', 'red', 'mini" style="width:auto')).join('')}</div>
-    <span class="hint" data-t="streamInfo" style="max-height:37px;overflow:hidden;white-space:pre-line"></span>
+    <div class="row" style="gap:8px">${rocker('data-b="stream"', 'Stream')}<span class="led" data-led="stream"></span><div class="lcd lcd2" data-t="streamLcd" data-tip="" style="width:112px;flex:none;align-self:flex-start"><span data-t="stream1"></span><br><span data-t="stream2"></span></div></div>
+    <div style="display:grid;grid-template-columns:repeat(4,52px);gap:5px">${[0, 1, 2, 3].map(n => key(`data-stn="${n}" aria-label="Stream ${n + 1}"`, `<span data-stl>${n + 1}</span>`, '', 'red')).join('')}</div>
    </div>
    <div class="pnl blank" aria-hidden="true">${SCREWS}</div>
   </section>
  </div>
-</div><div class="top">${native ? MONS.map(MONOV).join('') : ''}</div><div class="over"></div>`;
+</div><div class="top">${native ? MONS.map(MONOV).join('') : ''}</div><div class="over"></div><div class="tip" hidden></div>`;
       const root = this.shadowRoot;
       root.querySelectorAll('.rack>.pnl:not(.blank)').forEach(p => {
         const tray = document.createElement('div');
@@ -418,14 +480,51 @@ select.fld{appearance:auto}
       root.addEventListener('contextmenu', e => {
         e.preventDefault();
         const p = e.target.closest('[data-preset]');
-        if (p) this._cmd('presetMenu', { index: +p.dataset.preset, x: e.clientX, y: e.clientY });
+        if (p) return this._presetMenu(p);
+        if (e.target.closest('.over [data-close]')) this._closeOver(false);  // right-click beside a pop-up closes it
       });
+      // While a pop-up or dialog is open the keyboard is the page's (the host passes no shortcuts on).
+      new MutationObserver(() => {
+        const on = !!this._over.firstElementChild;
+        if (on !== !!this._pageKeys) { this._pageKeys = on; this._cmd('keys', { page: on }); }
+      }).observe(this._over, { childList: true });
+      // Tooltips: the console's own, in place of the system's (title attributes become data-tip on first hover).
+      const tip = root.querySelector('.tip');
+      let tipFor = null, tipT = 0;
+      const hideTip = () => { clearTimeout(tipT); tipFor = null; tip.hidden = true; };
+      root.addEventListener('mouseover', e => {
+        const t = e.target.closest('[title],[data-tip]');
+        if (t && t.hasAttribute('title')) { t.dataset.tip = t.getAttribute('title'); t.removeAttribute('title'); }
+        if (t === tipFor) return;
+        hideTip();
+        if (!t || !t.dataset.tip) return;
+        tipFor = t;
+        tipT = setTimeout(() => {
+          if (tipFor !== t || !t.isConnected || !t.dataset.tip) return;
+          tip.textContent = t.dataset.tip;
+          tip.style.maxWidth = t.classList.contains('info') ? '400px' : '';  // a panel's how-to: longer lines
+          tip.hidden = false;
+          const r = t.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+          const top = r.bottom + 6 + h <= innerHeight - 4 ? r.bottom + 6 : Math.max(4, r.top - 6 - h);
+          Object.assign(tip.style, { left: Math.max(4, Math.min(innerWidth - w - 4, r.left + r.width / 2 - w / 2)) + 'px', top: top + 'px' });
+        }, 600);
+      });
+      root.addEventListener('mousedown', hideTip, true);
+      addEventListener('resize', () => { hideTip(); if (this._over.querySelector('.pop')) this._closeOver(false); });  // they would be left where the keys were
+      root.addEventListener('wheel', hideTip, { capture: true, passive: true });
+      this.addEventListener('mouseleave', hideTip);
       root.addEventListener('mousedown', e => {
         if (e.button === 0 && e.target.closest('[data-drag]') && !e.target.closest('button')) this._cmd('drag');
         const kn = e.target.closest('[data-knob]');
         if (kn && e.button === 0) this._knobDrag(this._unitOf(kn), kn.dataset.knob, e);
       });
       root.addEventListener('dblclick', e => {
+        const kn = e.target.closest('[data-knob]');
+        if (kn) {  // a knob back to its default (the host's Settings defaults; RESET does all four)
+          const u = this._unitOf(kn), k = kn.dataset.knob;
+          if (!this._na(u, k)) this._setKnob(u, k, KNOBS[k][6]);
+          return;
+        }
         if (e.target.closest('[data-drag]') && !e.target.closest('button')) this._cmd('win', { what: 'max' });
       });
       root.addEventListener('wheel', e => {
@@ -438,7 +537,7 @@ select.fld{appearance:auto}
         this._setKnob(u, k, K.log ? x * Math.pow(1.05, dir * K.notch) : x + dir * K.step * K.notch);
       }, { passive: false });
       this._units.forEach((el, u) => this._joySetup(el.querySelector('[data-joy]'), u));
-      document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.modalOpen) { e.stopPropagation(); this._closeOver(true); } }, true);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.popupOpen) { e.stopPropagation(); if (this._confirmDone) this._confirmDone(false); else this._closeOver(true); } }, true);
       document.fonts && document.fonts.ready.then(() => { this._sizes = null; this._layout(); });
       if (this._state) this._update();
     }
@@ -549,11 +648,109 @@ select.fld{appearance:auto}
     }
 
     // ---- pop-ups (ship list) and the settings dialog, in .over
+    // A yes / no over whatever is open (the settings dialog): ok runs on the orange key, Escape or CANCEL backs out.
+    _confirm(title, okLabel, ok) {
+      const d = document.createElement('div');
+      d.className = 'back';
+      d.dataset.confirm = '';
+      d.innerHTML = `<div class="modal" role="alertdialog" aria-label="${title}">
+<div class="mhead"><span class="plate">${title}</span></div>
+<div class="mfoot" style="border-top:0"><div class="sp"></div>${key('data-cf="no"', 'CANCEL', '', '', 'w warn')}${key('data-cf="yes"', okLabel, '', '', 'w warn')}</div>
+</div>`;
+      const done = yes => { d.remove(); this._confirmDone = null; if (yes) ok(); };
+      this._confirmDone = done;
+      d.addEventListener('click', e => {
+        e.stopPropagation();  // not to the dialog underneath
+        const b = e.target.closest('[data-cf]');
+        if (b) done(b.dataset.cf === 'yes');
+      });
+      d.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); done(true); } });
+      this._over.appendChild(d);
+      d.querySelector('[data-cf="yes"]').focus();
+    }
     _closeOver(tellHost) {
-      const wasModal = this.modalOpen;
+      this._confirmDone = null;
+      const wasSettings = !!this._over.querySelector('[data-settings]');
       this._over.textContent = '';
-      if (wasModal && tellHost) this._cmd('settingsClose');
+      if (wasSettings && tellHost) this._cmd('settingsClose');
       this._formRev = -1;
+    }
+    // ---- camera tuning (the host's [developer] tuning): the camera monitor u shows, moved in DCS. POS and LOOK in
+    // metres along the carrier's axes (x forward, y up, z starboard), shown in feet too; FOV in degrees. The - / + keys
+    // repeat while held. {cmd:'tune', cam, field, axis, dir}, 'tuneStep' {index}, 'tuneReset' {cam}, 'tuneCopy' {cam}.
+    _tuneCam(u) { const c = this._joyCam(u); return c && c.tune ? c : null; }
+    _tunePanel(anchor, u) {
+      if (this._tuneU === u && this._over.querySelector('.pop.tune')) { this._closeOver(false); return this._update(); }
+      const c = this._tuneCam(u);
+      if (!c) return;
+      this._tuneU = u;
+      const row = (label, field, axis) => `<div class="tr"><span class="eng tl">${label}</span>${key(`data-tn="${field}" data-ax="${axis}" data-dir="-1" aria-label="${label} minus"`, '−', '', '')}<span class="lcd" data-tv="${field}${axis}"></span>${field === 'fov' ? '' : `<span class="lcd ft" data-tf="${field}${axis}"></span>`}${key(`data-tn="${field}" data-ax="${axis}" data-dir="1" aria-label="${label} plus"`, '+', '', '')}</div>`;
+      const steps = (c.tune.steps || []).map((v, i) => key(`data-ts="${i}" title="${(v * 3.28084).toFixed(2)} ft"`, v + ' m', '', '', 'w')).join('');
+      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop tune" role="dialog" aria-label="Camera tuning">
+<div class="ph"><span data-tt></span></div>
+${row('Pos X', 'pos', 0)}${row('Pos Y', 'pos', 1)}${row('Pos Z', 'pos', 2)}<div class="sep"></div>
+${row('Look X', 'look', 0)}${row('Look Y', 'look', 1)}${row('Look Z', 'look', 2)}<div class="sep"></div>
+${row('FOV', 'fov', 0)}<div class="sep"></div>
+<div class="tr"><span class="eng tl">Step</span>${steps}</div>
+<div class="tr" style="justify-content:flex-end">${key('data-tr="reset" title="Back to the hook\'s position for this camera"', 'RESET', '', '', 'w warn')}${key('data-tr="copy" title="The Lua line for this camera, to the clipboard"', 'COPY', '', '', 'w')}</div>
+<div class="alert" data-ta hidden></div></div>`;
+      const pop = this._over.querySelector('.pop');
+      this._tuneFill();
+      // beside the PTZ panel (right of it, else left), its bottom level with the panel's
+      const g = anchor.closest('[data-g=ptz]') || anchor, r = g.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+      const left = r.right + 8 + w <= innerWidth - 4 ? r.right + 8 : Math.max(4, r.left - 8 - w);
+      Object.assign(pop.style, { left: left + 'px', top: Math.max(4, Math.min(innerHeight - h - 4, r.bottom - h)) + 'px' });
+      let rep = null;
+      const stop = () => { clearTimeout(rep); rep = null; };
+      const nudge = b => {
+        const cam = this._tuneCam(u);
+        if (!cam || b.getAttribute('aria-disabled') === 'true') return false;
+        this._cmd('tune', { cam: cam.id, field: b.dataset.tn, axis: +b.dataset.ax, dir: +b.dataset.dir });
+        return true;
+      };
+      pop.addEventListener('pointerdown', e => {
+        const b = e.target.closest('[data-tn]');
+        if (!b || e.button !== 0) return;
+        e.preventDefault();
+        stop();
+        if (!nudge(b)) return;
+        const again = () => { if (nudge(b)) rep = setTimeout(again, 110); };
+        rep = setTimeout(again, 450);
+      });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => pop.addEventListener(t, stop));
+      this._over.onclick = e => {
+        if (e.target.closest('[data-close]')) { stop(); this._closeOver(false); return this._update(); }
+        const cam = this._tuneCam(u), st = e.target.closest('[data-ts]'), act = e.target.closest('[data-tr]');
+        if (st && cam) { cam.tune.step = cam.tune.steps[+st.dataset.ts]; this._tuneFill(); this._cmd('tuneStep', { index: +st.dataset.ts }); }
+        if (act && cam && act.getAttribute('aria-disabled') !== 'true') this._cmd(act.dataset.tr === 'reset' ? 'tuneReset' : 'tuneCopy', { cam: cam.id });
+      };
+      this._update();
+    }
+    // the open panel's values, from the host's last state; closed when its camera is gone
+    _tuneFill() {
+      const pop = this._over.querySelector('.pop.tune');
+      if (!pop) return;
+      const c = this._tuneCam(this._tuneU);
+      if (!c) return this._closeOver(false);
+      const t = c.tune, known = !!t.known, ft = 3.28084;
+      this._set(pop.querySelector('[data-tt]'), 'TUNE · ' + (t.name || c.name || ''));
+      ['pos', 'look'].forEach(f => [0, 1, 2].forEach(a => {
+        const v = known && t[f] ? +t[f][a] : NaN;
+        this._set(pop.querySelector(`[data-tv="${f}${a}"]`), isFinite(v) ? v.toFixed(2) + ' m' : '—');
+        this._set(pop.querySelector(`[data-tf="${f}${a}"]`), isFinite(v) ? (v * ft).toFixed(1) + ' ft' : '—');
+      }));
+      this._set(pop.querySelector('[data-tv="fov0"]'), known && isFinite(+t.fov) ? (+t.fov).toFixed(0) + '°' : '—');
+      pop.querySelectorAll('[data-tn]').forEach(b => this._lit(b, false, !known));
+      pop.querySelectorAll('[data-ts]').forEach(b => {
+        const on = (t.steps || [])[+b.dataset.ts] === t.step;
+        b.style.boxShadow = on ? 'inset 0 0 0 2px #62E06B' : '';
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      this._lit(pop.querySelector('[data-tr=reset]'), false, !t.tuned);
+      this._lit(pop.querySelector('[data-tr=copy]'), false, !known);
+      const al = pop.querySelector('[data-ta]');
+      al.hidden = !t.alert;
+      this._set(al, t.alert || '');
     }
     _shipList(anchor) {
       const ships = (this._state && this._state.ships) || [];
@@ -570,11 +767,11 @@ select.fld{appearance:auto}
         if (b || e.target.closest('[data-close]')) this._closeOver(false);
       };
     }
-    // A pop-up list under (or above) anchor: items [{label, on}], onPick(index).
+    // A pop-up list under (or above) anchor: items [{label, on} or {head}: a group's header], onPick(index).
     _pickList(anchor, items, onPick) {
       if (!items.length) return;
       const r = anchor.getBoundingClientRect();
-      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop" role="listbox">${items.map((it, i) => `<button data-pick-item="${i}"><span class="led" style="background:${LED.green[it.on ? 0 : 1]}"></span><span>${esc(it.label)}</span></button>`).join('')}</div>`;
+      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop" role="listbox">${items.map((it, i) => it.head ? `<div class="ph" role="presentation">${esc(it.head)}</div>` : `<button data-pick-item="${i}"><span class="led" style="background:${LED.green[it.on ? 0 : 1]}"></span><span>${esc(it.label)}</span></button>`).join('')}</div>`;
       const pop = this._over.querySelector('.pop');
       const h = pop.getBoundingClientRect().height;
       const above = r.top - h - 6 > 0 && r.bottom + h + 6 > innerHeight;
@@ -588,16 +785,106 @@ select.fld{appearance:auto}
     // a monitor's deck position
     _viewList(anchor, m, u) {
       const views = (m && m.views) || [];
-      this._pickList(anchor, views.map((v, i) => ({ label: v, on: i === m.view })), i => this._cmd('view', { mon: u, index: i }));
+      const items = deckGroups(views.length, new Set(m.hangar || [])).map(x => typeof x === 'number' ? { label: views[x], on: x === m.view, index: x } : x);
+      this._pickList(anchor, items, i => this._cmd('view', { mon: u, index: items[i].index }));
+    }
+    // a monitor's deck cycle: the positions it steps through (check boxes, applied as ticked) and the interval in s
+    _cycleList(anchor, m, u) {
+      const views = (m && m.views) || [], c = m && m.cycle;
+      if (!c || !views.length) return;
+      const sel = new Set(c.sel || []);
+      const live = () => (this._mons()[u] || {}).cycle || c;  // the state the host sent last (it may have changed meanwhile)
+      const r = anchor.getBoundingClientRect();
+      // the groups' headers tick or untick their group
+      const hg = new Set(m.hangar || []), groups = deckGroups(views.length, hg), idx = [...views.keys()];
+      const members = { flight: idx.filter(i => !hg.has(i)), hangar: idx.filter(i => hg.has(i)) };
+      const gState = g => { const k = members[g].filter(i => sel.has(i)).length; return k === 0 ? 'false' : k === members[g].length ? 'true' : 'mixed'; };
+      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop" role="dialog" aria-label="Cycle">${groups.map(x => typeof x === 'number' ? `<button role="menuitemcheckbox" aria-checked="${sel.has(x)}" data-cyc="${x}"><span class="cb"></span><span>${esc(views[x])}</span></button>` : `<button class="ph" role="menuitemcheckbox" aria-checked="${gState(x.g)}" data-cyc-g="${x.g}"><span class="cb"></span><span>${esc(x.head)}</span></button>`).join('')}<div class="cycint"><span class="eng">Interval</span><span class="sp"></span><input class="fld" data-cyc-s inputmode="decimal" maxlength="6" spellcheck="false" autocomplete="off" value="${esc(String(c.seconds || 10))}"><span class="eng dim">s</span></div></div>`;
+      const pop = this._over.querySelector('.pop'), f = pop.querySelector('[data-cyc-s]');
+      const h = pop.getBoundingClientRect().height;
+      const above = r.top - h - 6 > 0 && r.bottom + h + 6 > innerHeight;
+      Object.assign(pop.style, { left: Math.max(4, Math.min(innerWidth - pop.offsetWidth - 4, r.right - pop.offsetWidth)) + 'px', top: (above ? r.top - h - 6 : r.bottom + 6) + 'px' });
+      // the interval: a number of seconds, 2 .. 3600; anything else is marked and not sent
+      const commit = () => {
+        const t = f.value.trim().replace(',', '.'), x = Number(t), ok = t !== '' && isFinite(x) && x >= 2 && x <= 3600;
+        f.classList.toggle('bad', !ok);
+        f.setAttribute('aria-invalid', ok ? 'false' : 'true');
+        if (ok && x !== c.seconds) { c.seconds = live().seconds = x; this._cmd('cycle', { mon: u, seconds: x }); }
+        return ok;
+      };
+      f.addEventListener('input', () => f.classList.remove('bad'));
+      f.addEventListener('change', commit);
+      f.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (commit()) this._closeOver(false); } });
+      this._over.onclick = e => {
+        const b = e.target.closest('[data-cyc],[data-cyc-g]');
+        if (b) {
+          if (b.dataset.cycG) {  // a group: all ticked -> none, else all
+            const ms = members[b.dataset.cycG], all = ms.every(i => sel.has(i));
+            ms.forEach(i => { if (all) sel.delete(i); else sel.add(i); });
+          } else {
+            const i = +b.dataset.cyc;
+            if (sel.has(i)) sel.delete(i); else sel.add(i);
+          }
+          pop.querySelectorAll('[data-cyc]').forEach(x => x.setAttribute('aria-checked', sel.has(+x.dataset.cyc) ? 'true' : 'false'));
+          pop.querySelectorAll('[data-cyc-g]').forEach(x => x.setAttribute('aria-checked', gState(x.dataset.cycG)));
+          c.sel = live().sel = [...sel].sort((a, z) => a - z);  // shown at once; the host's next state confirms
+          this._cmd('cycle', { mon: u, sel: c.sel.join(',') });
+          return;
+        }
+        if (e.target.closest('[data-close]')) { if (f.classList.contains('bad')) f.value = String(c.seconds); this._closeOver(false); }
+      };
     }
     // a preview's source: none, or any source
     _tileList(anchor, slot) {
       const s = this._state || {}, sources = s.sources || [], cur = (s.previews || [])[slot] || '';
-      const items = [{ id: '', label: 'No source', on: !cur }].concat(sources.map(x => ({ id: x.id, label: x.plate || x.name, on: x.id === cur })));
+      const item = x => ({ id: x.id, label: x.plate || x.name, on: x.id === cur });
+      const deck = sources.filter(x => x.group === 'deck'), hangar = new Set(deck.map((x, i) => x.hangar ? i : -1).filter(i => i >= 0));
+      const items = [{ id: '', label: 'No source', on: !cur }].concat(sources.filter(x => x.group !== 'deck').map(item),
+        deckGroups(deck.length, hangar).map(x => typeof x === 'number' ? item(deck[x]) : x));
       this._pickList(anchor, items, i => this._cmd('preview', { slot, id: items[i].id }));
     }
+    // Right-click on a preset: save / rename / clear (a fixed preset - Night - offers none of them).
+    _presetMenu(anchor) {
+      const i = +anchor.dataset.preset, p = ((this._state || {}).presets || [])[i] || {}, can = !p.fixed;
+      const items = [['save', 'Save', can], ['rename', 'Rename…', can], ['clear', 'Clear', can && !!p.saved]];
+      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop menu" role="menu">${items.map(([id, l, on]) => `<button role="menuitem" data-pm="${id}"${id === 'clear' ? ' class="warn"' : ''}${on ? '' : ' disabled'}>${l}</button>`).join('')}</div>`;
+      // under the key (above it near the bottom); the rack is zoomed, so not at the pointer's coordinates
+      const r = anchor.getBoundingClientRect(), pop = this._over.querySelector('.pop'), w = pop.offsetWidth, h = pop.offsetHeight;
+      Object.assign(pop.style, { left: Math.max(4, Math.min(innerWidth - w - 4, r.left)) + 'px', top: (r.bottom + h + 6 > innerHeight ? Math.max(4, r.top - h - 4) : r.bottom + 4) + 'px' });
+      this._over.onclick = e => {
+        const b = e.target.closest('[data-pm]');
+        if (b && b.disabled) return;
+        if (!b) { if (e.target.closest('[data-close]')) this._closeOver(false); return; }
+        this._closeOver(false);
+        if (b.dataset.pm === 'save') this._cmd('preset', { index: i, save: true });
+        else if (b.dataset.pm === 'clear') this._cmd('presetClear', { index: i });
+        else this._renameDialog(i, p);
+      };
+    }
+    // The preset's new name (empty: its number).
+    _renameDialog(i, p) {
+      const cur = String(p.name || '');
+      this._over.innerHTML = `<div class="back"><div class="modal" role="dialog" aria-label="Rename preset">
+<div class="mhead"><span class="plate">Rename preset</span><div class="sp"></div>${key('data-rn="cancel" aria-label="Close"', '✕', '', '', 'w sm')}</div>
+<div class="mbody"><input class="fld" maxlength="10" spellcheck="false" autocomplete="off" placeholder="${esc(String(i))}" value="${esc(cur === String(i) ? '' : cur)}"></div>
+<div class="mfoot"><div class="sp"></div>${key('data-rn="cancel"', 'CANCEL', '', '', 'w warn')}${key('data-rn="ok"', 'OK', '', '', 'w')}</div>
+</div></div>`;
+      const f = this._over.querySelector('input');
+      const done = ok => {
+        const name = f.value.trim().slice(0, 10);
+        this._closeOver(false);
+        if (ok) this._cmd('rename', { index: i, name });
+      };
+      this._over.onclick = e => { const b = e.target.closest('[data-rn]'); if (b) done(b.dataset.rn === 'ok'); };
+      f.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
+      });
+      f.focus();
+      f.select();
+    }
     _settings(f) {
-      if (!f) { if (this.modalOpen) this._closeOver(false); return; }
+      if (!f) { if (this._over.querySelector('[data-settings]')) this._closeOver(false); return; }
       if (f.rev === this._formRev) { this._settingsBanner(f); return; }
       this._formRev = f.rev;
       const field = d => {
@@ -608,27 +895,29 @@ select.fld{appearance:auto}
         else if (d.type === 'path') ctl = `<div class="row"><textarea class="fld path" data-k="${k}" rows="2" spellcheck="false">${esc(v)}</textarea>${key(`data-sa="browse" data-key="${k}"`, 'BROWSE', '', '', 'w')}</div>`;
         else if (d.type === 'text' && (d.options || []).length) ctl = `<div class="col" style="gap:5px"><textarea class="fld path" data-k="${k}" rows="2" spellcheck="false">${esc(v)}</textarea><div class="toks">${d.options.map(o => `<button class="tok" data-tok="${esc(o[0])}" data-for="${k}" title="${esc(o[1])}">${esc(o[0])}</button>`).join('')}</div></div>`;
         else if (d.type === 'multi') { const on = String(v).split(',').filter(Boolean); ctl = `<div class="toks multi" data-k="${k}" data-multi>${(d.options || []).map(o => `<button class="tok${on.includes(String(o[0])) ? ' on' : ''}" data-m="${esc(o[0])}">${esc(o[1])}</button>`).join('')}</div>`; }
-        else if (d.type === 'action') { const a = String(v).split('|'); ctl = `<div class="row">${key(`data-sa="${esc(a[0])}"${a[0] === 'none' || a[0] === 'busy' ? ' disabled' : ''}`, esc(a[1] || a[0]), '', '', 'w')}</div>`; }
+        else if (d.type === 'action') { const a = String(v).split('|'); ctl = `<div class="row">${key(`data-sa="${esc(a[0])}"${a[0] === 'none' || a[0] === 'busy' ? ' disabled' : ''}`, esc(a[1] || a[0]), '', '', /remove|clear|delete|reset/i.test(a[0]) ? 'w warn' : 'w')}</div>`; }
+        else if (d.type === 'info') ctl = `<span class="lcd">${esc(v)}</span>`;
         else if (d.type === 'key') ctl = `<button class="fld keyb${+v ? '' : ' none'}" data-k="${k}" data-code="${+v || 0}">${esc(keyName(+v))}</button>`;
         else if (d.type === 'number') ctl = `<div class="row"><input class="fld" data-k="${k}" type="number" value="${esc(v)}"${d.min != null ? ` min="${d.min}"` : ''}${d.max != null ? ` max="${d.max}"` : ''}${d.step != null ? ` step="${d.step}"` : ''} style="width:110px"><span class="unitx">${esc(d.unit || '')}</span></div>`;
-        else ctl = `<input class="fld" data-k="${k}" type="${d.type === 'password' ? 'password' : 'text'}" value="${esc(v)}" spellcheck="false" autocomplete="off">`;
+        else ctl = `<input class="fld" data-k="${k}" type="${d.type === 'password' ? 'password' : 'text'}" value="${esc(v)}"${d.type === 'text' && d.max ? ` maxlength="${+d.max}"` : ''} spellcheck="false" autocomplete="off">`;
         const exp = String(d.key).startsWith('experimental.') ? '<span class="rs" style="color:#F2A03C" title="Experimental: may cost DCS frame rate or misbehave">⚠</span>' : '';
         return `<div class="frow"${d.hint ? ` title="${esc(d.hint)}"` : ''}><span class="eng" style="font-size:9px">${esc(d.label)}${exp}${d.restart ? '<span class="rs" title="Restart required">↻</span>' : ''}</span>${ctl}</div>`;
       };
       // the stream targets ("Stream 1" ...) share one panel: keys 1-4 choose the one shown
       const secs = f.sections || [], tgt = secs.filter(x => /^Stream \d$/.test(x.title));
-      const one = x => `<div class="pnl sect${(x.fields || []).some(y => y.type === 'key') ? ' keys' : ''}">${SCREWS}<span class="plate">${esc(x.title)}</span>${(x.fields || []).map(field).join('')}</div>`;
-      const targets = () => `<div class="pnl sect">${SCREWS}<div class="row"><span class="plate">Streams</span><div class="sp"></div>${tgt.map((x, n) => key(`data-stg-key="${n}" aria-label="${esc(x.title)}"`, String(n + 1), '', 'green', 'mini" style="width:36px')).join('')}</div>${tgt.map((x, n) => `<div class="stg" data-stg="${n}"${n ? ' hidden' : ''}>${(x.fields || []).map(field).join('')}</div>`).join('')}</div>`;
+      const plate = x => `<span class="plate">${esc(x.title)}</span>${x.tip ? `<span class="info" title="${esc(x.tip)}">i</span>` : ''}`;
+      const one = x => `<div class="pnl sect${(x.fields || []).some(y => y.type === 'key') ? ' keys' : ''}" data-sect="${esc(x.title)}">${SCREWS}${x.tip ? `<div class="row" style="gap:0">${plate(x)}</div>` : plate(x)}${(x.fields || []).map(field).join('')}</div>`;
+      const targets = () => `<div class="pnl sect stgs">${SCREWS}<div class="row"><span class="plate">Streams</span><div class="sp"></div>${tgt.map((x, n) => key(`data-stg-key="${n}" aria-label="${esc(x.title)}"`, `<span data-stl>${esc(stName({ label: ((x.fields || []).find(y => /\.label$/.test(y.key)) || {}).value }, n))}</span>`, '', 'green')).join('')}</div>${tgt.map((x, n) => `<div class="stg" data-stg="${n}"${n ? ' hidden' : ''}>${(x.fields || []).map(field).join('')}<div class="frow" style="margin-top:8px"><span></span><div class="row">${key(`data-stg-clear="${n}"`, 'CLEAR', '', '', 'w warn')}</div></div></div>`).join('')}</div>`;
       let panels = '', done = false;
       for (const x of secs) {
         if (!tgt.includes(x)) panels += one(x);
         else if (!done) { panels += targets(); done = true; }
       }
-      this._over.innerHTML = `<div class="back"><div class="modal" role="dialog" aria-label="Settings">
+      this._over.innerHTML = `<div class="back"><div class="modal" role="dialog" aria-label="Settings" data-settings>
 <div class="mhead"><span class="plate">Settings</span><span class="hint">${esc(f.file || '')}</span><div class="sp"></div><span class="hint"><span class="rs">↻</span> Restart required</span>${key('data-sa="cancel" aria-label="Close"', '✕', '', '', 'w sm')}</div>
 <div class="banner" data-banner hidden></div>
 <div class="mbody">${panels}</div>
-<div class="mfoot">${key('data-sa="openFile" title="The settings file itself, for backup or to share"', 'OPEN FILE', '', '', 'w')}${key('data-sa="export"', 'EXPORT…', '', '', 'w')}${key('data-sa="import"', 'IMPORT…', '', '', 'w')}<div class="sp"></div>${key('data-sa="cancel"', 'CANCEL', '', '', 'w')}${key('data-sa="save"', 'SAVE', '', '', 'w')}</div>
+<div class="mfoot">${key('data-sa="openFile" title="The settings file itself, for backup or to share"', 'OPEN FILE', '', '', 'w')}${key('data-sa="export"', 'EXPORT…', '', '', 'w')}${key('data-sa="import"', 'IMPORT…', '', '', 'w')}<div class="sp"></div>${key('data-sa="cancel"', 'CANCEL', '', '', 'w warn')}${key('data-sa="save"', 'SAVE', '', '', 'w')}</div>
 </div></div>`;
       this._settingsBanner(f);
       const stgShow = n => {
@@ -636,10 +925,36 @@ select.fld{appearance:auto}
         this._over.querySelectorAll('[data-stg-key]').forEach(b => this._lit(b, +b.dataset.stgKey === n, false));
       };
       stgShow(0);
+      this._over.querySelectorAll('[data-stg] [data-k$=".label"]').forEach(f => f.addEventListener('input', () => {
+        const n = +f.closest('[data-stg]').dataset.stg, sl = this._over.querySelector(`[data-stg-key="${n}"] [data-stl]`);
+        if (sl) sl.textContent = stName({ label: f.value }, n);
+      }));
       this._settingsLayout();
+      if (this._showSect) {  // opened from the benchmark lamp: that panel in view, its frame lit for a moment
+        const p = [...this._over.querySelectorAll('[data-sect]')].find(x => x.dataset.sect === this._showSect);
+        this._showSect = null;
+        if (p) {
+          p.scrollIntoView({ block: 'nearest' });
+          p.classList.add('hl');
+          setTimeout(() => p.classList.remove('hl'), 1600);
+        }
+      }
       this._over.onclick = e => {
         const sk = e.target.closest('[data-stg-key]');
         if (sk) return stgShow(+sk.dataset.stgKey);
+        const sc = e.target.closest('[data-stg-clear]');
+        if (sc) {  // every field of this stream target back to its default (kept only on SAVE), once confirmed
+          const n = +sc.dataset.stgClear, name = this._over.querySelector(`[data-stg-key="${n}"] [data-stl]`).textContent;
+          return this._confirm(`Clear stream ${esc(name)}`, 'CLEAR', () => {
+            for (const d of tgt[n].fields || []) {
+              const el = this._over.querySelector(`[data-k="${d.key}"]`), v = d.default == null ? '' : String(d.default);
+              if (!el) continue;
+              if (el.hasAttribute('data-multi')) { const on = v.split(','); el.querySelectorAll('.tok').forEach(b => b.classList.toggle('on', on.includes(b.dataset.m))); }
+              else if (el.hasAttribute('data-bool')) el.setAttribute('aria-pressed', +v > 0.5 ? 'true' : 'false');
+              else { el.value = v; el.dispatchEvent(new Event('input')); }
+            }
+          });
+        }
         const b = e.target.closest('[data-bool]');
         if (b) { b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'); return; }
         const mt = e.target.closest('[data-m]');
@@ -689,10 +1004,17 @@ select.fld{appearance:auto}
       const sig = innerWidth + 'x' + innerHeight + ':' + panels.length + ':' + (banner && !banner.hidden);
       if (body._sig === sig) return;
       body._sig = sig;
-      const focused = this.shadowRoot.activeElement;
+      const focused = this.shadowRoot.activeElement, top = body.scrollTop;
       const G = 12, cs = getComputedStyle(body);
       const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight), padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-      const chrome = modal.getBoundingClientRect().height - body.getBoundingClientRect().height;  // title, banner, buttons
+      // title, banner, buttons: measured one by one (the modal's own height stops at its max-height, so the
+      // difference to the body would miss a banner that just appeared)
+      const ms = getComputedStyle(modal);
+      const chrome = parseFloat(ms.borderTopWidth) + parseFloat(ms.borderBottomWidth) + [...modal.children].filter(c => c !== body).reduce((t, c) => {
+        if (c.hidden) return t;
+        const s = getComputedStyle(c);
+        return t + c.getBoundingClientRect().height + parseFloat(s.marginTop) + parseFloat(s.marginBottom);
+      }, 0);
       const W = innerWidth - 48 - padX - 2, H = innerHeight - 48 - chrome - padY - 2;
       const CW = Math.max(240, Math.min(420, W - 12));  // a column: 420 px, narrower in a narrow window
       body.classList.add('measuring');
@@ -762,6 +1084,7 @@ select.fld{appearance:auto}
       body.style.width = (pick.n * CW + (pick.n - 1) * G + padX + (pick.fits ? 0 : 12)) + 'px';
       body.style.height = (Math.min(pick.tall, H) + padY) + 'px';
       body.classList.toggle('scroll', !pick.fits);
+      body.scrollTop = pick.fits ? 0 : top;
       if (focused && focused !== this.shadowRoot.activeElement && body.contains(focused)) focused.focus({ preventScroll: true });
     }
     // A key binding records the next key pressed (with Shift / Ctrl / Alt). Esc cancels, Delete clears. A key another
@@ -829,8 +1152,19 @@ select.fld{appearance:auto}
       const b = e.target.closest('[data-b]');
       if (!b || b.getAttribute('aria-disabled') === 'true') return;
       const id = b.dataset.b;
+      if (id === 'benchLamp') {  // armed or running: SETTINGS > Benchmark; after a run: its report, and the lamp goes out
+        const st = (s.bench || {}).state;
+        if (st === 'armed' || st === 'running') { this._showSect = 'Benchmark'; return this._cmd('settings'); }
+        return this._cmd('benchLamp');
+      }
       if (id === 'manual') return this._cmd('mode', { auto: false });
       if (id === 'automode') return this._cmd('mode', { auto: true });
+      if (id === 'acft') {  // the next of my aircraft, my section, my flight, all aircraft
+        const v = s.vtr || {}, next = ACFT[(ACFT.indexOf(v.autoFilter) + 1) % ACFT.length];
+        v.autoFilter = next;  // shown at once; the host's next state confirms
+        this._update();
+        return this._cmd('autoFilter', { value: next });
+      }
       if (id === 'stream') return this._cmd('stream', { on: !(s.stream && s.stream.on) });
       if (id === 'shipPrev') return this._cmd('shipStep', { dir: -1 });
       if (id === 'shipNext') return this._cmd('shipStep', { dir: 1 });
@@ -838,9 +1172,20 @@ select.fld{appearance:auto}
       if (id === 'recArm') return m.id && this._cmd('recArm', { id: m.id });
       if (id === 'viewPrev' || id === 'viewNext') return m.id && this._cmd('view', { mon: u, dir: id === 'viewPrev' ? -1 : 1 });
       if (id === 'viewList') return this._viewList(b, m, u);
-      if (id === 'ptzRest' || id === 'ptzAuto' || id === 'ptzFlir') { const c = this._joyCam(u); return c && this._cmd(id, { cam: c.id }); }
+      if (id === 'cycleList') return this._cycleList(b, m, u);
+      if (id === 'cycle') {  // on / off; switched on with nothing ticked, the pop-up opens to tick some
+        const c = m.cycle;
+        if (!c) return;
+        c.on = !c.on;  // shown at once; the host's next state confirms
+        this._update();
+        this._cmd('cycle', { mon: u, on: c.on });
+        if (c.on && !(c.sel || []).length) this._cycleList(this._units[u].querySelector('[data-b=cycleList]'), m, u);
+        return;
+      }
+      if (id === 'ptzTune') return this._tunePanel(b, u);
+      if (id === 'ptzRest' || id === 'ptzAuto' || id === 'ptzFlir') { const c = this._joyCam(u); return c && !(id === 'ptzAuto' && c.track === false) && this._cmd(id, { cam: c.id }); }
       if (id === 'ptzTarget') {  // TGT: the next target
-        const c = this._joyCam(u), ts = (c && c.targets) || [];
+        const c = this._joyCam(u), ts = (c && c.track !== false && c.targets) || [];
         if (!ts.length) return;
         const i = ts.findIndex(x => x[0] === c.target), next = ts[(i + 1) % ts.length];
         c.target = next[0];  // shown at once; the host's next state confirms
@@ -892,9 +1237,9 @@ select.fld{appearance:auto}
       this._set(o('time'), burn ? m.time || '' : '');
       this._set(o('ship'), burn ? m.ship || '— — —' : '');
       this._set(o('name'), burn ? (m.burnName != null ? m.burnName : m.name) || '' : '');
-      const play = isProgram && vtr.play, recNow = !!vtr.rec && (m.rec !== false);
+      const play = !!vtr.play && (isProgram || !!m.replay), recNow = !!vtr.rec && (m.rec !== false);
       const br = o('rec');
-      this._set(br, play ? '▶ REPLAY ' + (vtr.replayTime || '') : recNow && m.signal ? '● REC' : '');
+      this._set(br, play ? '▶ REPLAY ' + (vtr.replayTime || '') + (vtr.speed ? ' ' + vtr.speed : '') : recNow && m.signal ? '● REC' : '');
       br.style.color = play ? '#E7D04F' : '#FF6B66';
       br.classList.toggle('blink', recNow && !play);
     }
@@ -906,11 +1251,23 @@ select.fld{appearance:auto}
       const mons = this._mons(), wall = this._wall();
       root.querySelector('.wbx').style.display = s.windowButtons === false ? 'none' : 'flex';
       root.querySelector('[data-b=settings]').style.display = s.settings === false ? 'none' : 'flex';
+      root.querySelector('[data-b=guide]').style.display = s.guide === false ? 'none' : 'flex';
+      {  // the benchmark lamp: armed and complete steady green, running flashing amber, error red; hidden without a state
+        const bl = q('[data-b=benchLamp]'), bs = s.bench || null, l = bl.querySelector('.lamp');
+        const c = bs && LAMP[{ armed: 'green', complete: 'green', running: 'amber', error: 'red' }[bs.state]];
+        bl.hidden = !c;
+        if (c) {
+          l.style.background = c[0];
+          l.style.boxShadow = `0 0 6px 1px ${c[0]},inset 0 0 0 1px rgba(255,255,255,.3)`;
+          l.classList.toggle('blink', bs.state === 'running');
+          bl.dataset.tip = bs.tip || 'Benchmark';
+        }
+      }
       // the source keys: one per source - the deck positions as one DECK key (the view selector picks the position)
       const keyed = [];
       sources.forEach(x => {
         const id = x.group || x.id;
-        if (!keyed.some(k => k.id === id)) keyed.push(x.group ? { id: x.group, name: String(x.group).toUpperCase(), plate: 'Deck cameras', key: '' } : x);
+        if (!keyed.some(k => k.id === id)) keyed.push(x.group ? { id: x.group, name: String(x.group).toUpperCase(), plate: 'Deck cameras', key: x.key || '' } : x);
       });
       // the previews: assigned by the host (state.previews: 4 source ids, '' = none), else every source but A's
       const assigned = Array.isArray(s.previews), progId = (mons[0] || {}).id;
@@ -963,6 +1320,11 @@ select.fld{appearance:auto}
         this._set(o('view'), views[vi] || '');
         this._set(o('viewN'), views.length > 1 ? `${vi + 1}/${views.length}` : '');
         this._lit(el.querySelector('[data-b=recArm]'), !!m.rec, !m.id);
+        // the deck cycle (a deck position on this monitor)
+        const cy = el.querySelector('[data-b=cycle]'), cl = el.querySelector('[data-b=cycleList]'), cyc = views.length > 1 ? m.cycle : null;
+        cy.style.visibility = cl.style.visibility = cyc ? '' : 'hidden';
+        this._lit(cy, !!(cyc && cyc.on), !cyc);
+        this._lit(cl, false, !cyc);
         // levels
         const noLevels = !m.picture || (na.exp && na.bri && na.con && na.gam);
         el.querySelector('[data-g=lev]').classList.toggle('na', !!noLevels);
@@ -989,14 +1351,32 @@ select.fld{appearance:auto}
         this._set(o('cam'), c ? c.name || m.name || '' : 'fixed view');
         el.querySelector('[data-joy]').classList.toggle('na', !live);
         this._lit(el.querySelector('[data-b=ptzRest]'), false, !live);
-        this._lit(el.querySelector('[data-b=ptzAuto]'), !!(c && c.auto), !live);
+        const au = el.querySelector('[data-b=ptzAuto]'), tk = el.querySelector('[data-b=ptzTarget]'), noTrack = !!c && c.track === false;
+        au.hidden = tk.hidden = o('target').hidden = noTrack;  // a hangar position: nothing to follow
+        this._lit(au, !!(c && c.auto), !live);
         const tg = c && (c.targets || []).find(x => x[0] === c.target);
         this._set(o('target'), tg ? tg[1] : '—');
-        this._lit(el.querySelector('[data-b=ptzTarget]'), false, !c);
+        this._lit(tk, false, !c);
         const fl = el.querySelector('[data-b=ptzFlir]');  // experimental ([experimental] flir)
         fl.hidden = !(c && c.flirAvail);
         this._lit(fl, !!(c && c.flir), !live);
+        const tu = el.querySelector('[data-b=ptzTune]');  // [developer] tuning
+        tu.hidden = !(c && c.tune);
+        this._lit(tu, this._tuneU === u && !!this._over.querySelector('.pop.tune'), !(c && c.tune));
       });
+      // a control group that changed shape (keys shown or hidden: a hangar position's PTZ, FLIR, TUNE, CYCLE; a
+      // heading or LCD whose text changed length; the wall showing one monitor or two): measured again, or the
+      // solver keeps the old widths and the strip wraps under the rack
+      const shape = this._wall() + '|' + this._units.map(el => [...el.querySelectorAll('.strip [data-b],.strip [data-o],.strip [data-l]')]
+        .map(x => x.hidden || x.closest('[hidden]') ? 0 : 1).join('') + ':' +
+        [...el.querySelectorAll('.strip [data-o=group],.strip [data-o=cam],.strip [data-o=view],.strip [data-o=target]')]
+          .map(x => x.textContent.length).join(',')).join('|');
+      if (shape !== this._shapeSig) {
+        this._shapeSig = shape;
+        this._sizes = null;
+        this._dirty = true;
+      }
+      this._tuneFill();  // the camera tuning panel, if open
       // previews
       root.querySelectorAll('.tile[data-tile]').forEach(t => {
         const id = t.dataset.sid, src = id ? sources.find(x => x.id === id) : null, signal = !!(src && src.signal);
@@ -1010,7 +1390,7 @@ select.fld{appearance:auto}
       // ship
       const cur = ships.find(x => x.on) || null, idx = cur ? ships.indexOf(cur) + 1 : 0;
       this._text('shipHull', cur ? cur.hull : ships.length ? '— — —' : 'NO CARRIER');
-      this._text('shipUnit', cur ? cur.unit : ships.length ? 'NONE SELECTED' : '');
+      this._text('shipUnit', cur ? cur.name || cur.unit : ships.length ? 'NONE SELECTED' : '');
       this._text('shipHint', ships.length > 1 ? `${idx || '–'} of ${ships.length}` : '');
       this._lit(q('[data-b=shipPrev]'), false, ships.length < 2);
       this._lit(q('[data-b=shipNext]'), false, ships.length < 2);
@@ -1019,21 +1399,30 @@ select.fld{appearance:auto}
         const x = presets[+b.dataset.preset] || {};
         this._lit(b, !!x.active, false);
         b.style.color = x.saved ? '' : '#7C8186';
-        b.title = x.saved ? 'Load ' + x.name + ' (every monitor and camera) · right-click: save, rename, clear' : 'Empty · Ctrl+' + (x.key || 'click') + ' or right-click saves';
+        b.dataset.tip = x.saved ? 'Load ' + x.name + ' (every monitor and camera) · right-click: save, rename, clear' : 'Empty · Ctrl+' + (x.key || 'click') + ' or right-click saves';
       });
       // VTR
       const B = id => q(`[data-b=${id}]`);
       this._text('counter', vtr.counter || '00:00:00');
       this._text('vtr1', vtr.line1 || '');
       this._text('vtr2', vtr.line2 || '');
+      this._text('folderInfo', vtr.folderInfo || '');
+      this._t.folderInfo.hidden = !vtr.folderInfo;  // a host without a folder
       const noVtr = vtr.ok === false;
       this._lit(B('manual'), vtr.mode === 'manual', noVtr);
       this._lit(B('automode'), vtr.mode === 'auto', noVtr);
+      this._lit(B('comp'), !!vtr.composite, noVtr);
       this._lit(B('rec'), !!vtr.rec, noVtr);
       this._lit(B('play'), !!vtr.play, noVtr);
       this._lit(B('stop'), false, noVtr);
       this._lit(B('save'), false, !vtr.canSave);
+      this._lit(B('still'), false, !vtr.canStill);
       this._lit(B('folder'), false, vtr.folder === false);
+      root.querySelectorAll('[data-l=acft]').forEach(e => { e.hidden = !ACFT.includes(vtr.autoFilter); });  // a host without the filter
+      const noAcft = !!vtr.noAcft && vtr.mode === 'auto' && vtr.autoFilter !== 'all';  // nothing can record: needs attention
+      this._text('acft', ACFT_LCD[vtr.autoFilter] || '');
+      this._text('noAcft', noAcft ? 'NO ACFT' : '');
+      this._lit(B('acft'), false, noVtr);
       // black box, stream
       this._rocker(B('bb'), !!bb.on, false);
       this._led(q('[data-led=bb]'), !!bb.on, 'amber');
@@ -1050,14 +1439,32 @@ select.fld{appearance:auto}
         const b = q(`[data-stn="${n}"]`);
         if (!b) return;
         this._lit(b, t.state !== 'off', !t.set);
+        const name = stName(t, n), sl = b.querySelector('[data-stl]');
+        if (sl && sl.textContent !== name) sl.textContent = name;
+        b.setAttribute('aria-label', t.label ? t.label : 'Stream ' + (n + 1));
         b.disabled = !t.set && t.state === 'off';
         const l = b.querySelector('.lamp');
         if (l) l.classList.toggle('blink', t.state === 'connecting' || t.state === 'retrying');
       });
-      this._text('streamWord', st.state === 'live' ? 'LIVE' : st.on ? (st.state === 'retrying' ? 'RETRY' : 'CONNECT') : 'OFF');
-      this._text('streamInfo', st.text || '');
-      this._t.streamInfo.hidden = !st.text;
-      this._t.streamInfo.style.color = st.state === 'retrying' ? '#E0524E' : '';
+      // the LCD: the state (with live / on when several run), then the rate, or the first stream not live and why
+      {
+        const on = (st.targets || []).map((t, n) => [t, n]).filter(([t]) => t.state !== 'off');
+        const live = on.filter(([t]) => t.state === 'live');
+        const word = { live: 'LIVE', connecting: 'CONNECTING', retrying: 'RETRYING' }[st.state] || 'OFF';
+        let l1 = word, l2 = '';
+        if (on.length > 1) l1 += ` ${live.length}/${on.length}`;
+        const bad = on.find(([t]) => t.state !== 'live');
+        if (bad) {
+          const m = bad[0].msg && bad[0].msg !== word ? bad[0].msg : '';
+          l2 = on.length > 1 ? `${stName(bad[0], bad[1])} ${m || bad[0].state.toUpperCase()}` : m;
+        } else if (live.length) {
+          l2 = `${live.reduce((a, [t]) => a + (t.rate || 0), 0).toFixed(1)} MBIT/S`;
+        }
+        this._text('stream1', l1);
+        this._text('stream2', l2);
+        this._t.streamLcd.dataset.tip = st.text || '';
+        this._t.streamLcd.style.color = st.state === 'retrying' ? '#E0524E' : '';
+      }
       // settings dialog
       this._settings(s.settingsForm || null);
       if (this._dirty) { this._dirty = false; this._layout(); }
@@ -1065,15 +1472,20 @@ select.fld{appearance:auto}
 
     // ---- layout
     // Natural sizes of the channel strip's groups and the rack's modules ([w, h], px), measured unwrapped.
+    // Each group is as wide as it is on the widest of the monitors on the wall: their headings (LEVELS · <sources>,
+    // PTZ · <camera>) and keys differ, and one size for all would wrap the other monitor's strip under the rack.
     _measure() {
       const root = this.shadowRoot, st = root.querySelector('.stage');
-      const u0 = this._units[0], hid = u0.style.display;
-      u0.style.display = '';
+      const units = this._wall() === '2' ? this._units : this._units.slice(0, 1), hid = units.map(u => u.style.display);
+      units.forEach(u => { u.style.display = ''; });
       st.classList.add('measure');
-      const sz = e => { const r = e.getBoundingClientRect(); return [Math.ceil(r.width) + 1, Math.ceil(r.height)]; };
-      this._sizes = { groups: [...u0.querySelectorAll('.strip>.grp')].map(sz), mods: [...root.querySelectorAll('.rack>.pnl:not(.blank)')].map(sz) };
+      // + 3 px: scaled, a group renders up to a pixel or two wider than measured (a row that only just fits wraps)
+      const sz = e => { const r = e.getBoundingClientRect(); return [Math.ceil(r.width) + 3, Math.ceil(r.height)]; };
+      const groups = units.map(u => [...u.querySelectorAll('.strip>.grp')].map(sz))
+        .reduce((a, b) => a.map((x, i) => [Math.max(x[0], b[i][0]), Math.max(x[1], b[i][1])]));
+      this._sizes = { groups, mods: [...root.querySelectorAll('.rack>.pnl:not(.blank)')].map(sz) };
       st.classList.remove('measure');
-      u0.style.display = hid;
+      units.forEach((u, i) => { u.style.display = hid[i]; });
     }
 
     // The solver: where the monitors, previews and rack go in a W x H stage. Every candidate arrangement is scored

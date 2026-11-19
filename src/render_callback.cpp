@@ -1,5 +1,6 @@
 #include "render_callback.h"
 
+#include "bench.h"
 #include "common.h"
 #include "compat.h"
 #include "engine.h"
@@ -35,6 +36,7 @@ void OnEvent(int ev) {
         expected = 0;
         g_renderThread.compare_exchange_strong(expected, tid);
         g_calls.fetch_add(1, std::memory_order_relaxed);
+        BenchFrame();  // the benchmark's frame timer (bench.cpp; nothing unless a run is under way)
     }
     if (RenderFrameFn fn = g_fn.load(std::memory_order_acquire)) fn(ev);
 }
@@ -71,7 +73,7 @@ public:
 }  // namespace
 
 std::string EnsureRenderCallback(RenderFrameFn fn) {
-    g_fn.store(fn, std::memory_order_release);
+    if (fn) g_fn.store(fn, std::memory_order_release);  // null: install only (the benchmark's frame timer)
     if (g_installed) return {};
 
     HMODULE gc = GetModuleHandleW(L"GraphicsCore.dll");

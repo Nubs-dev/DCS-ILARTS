@@ -15,11 +15,12 @@
 
 namespace ilcam {
 
-constexpr int kCams = 6;
-// the sources, as the viewer names them ("a" monitor A, "b" monitor B, then fixed sources)
-constexpr const wchar_t* kCamSource[kCams] = {L"a", L"b", L"plat", L"lso1", L"lso2", L"island"};
+constexpr int kCams = 7;
+// the sources, as the viewer names them ("a" monitor A, "b" monitor B, fixed sources, then "composite": up to four
+// of those in one picture, [outputs] tiles)
+constexpr const wchar_t* kCamSource[kCams] = {L"a", L"b", L"plat", L"lso1", L"lso2", L"island", L"composite"};
 constexpr const wchar_t* kCamName[kCams] = {L"ILARTS Monitor A", L"ILARTS Monitor B", L"ILARTS PLAT",
-                                            L"ILARTS LSO 1",     L"ILARTS LSO 2",     L"ILARTS Island"};
+                                            L"ILARTS LSO 1",     L"ILARTS LSO 2",     L"ILARTS Island",    L"ILARTS Composite"};
 // {6C1A5E70-3B1D-4E8A-9C27-1F0D5A4B7E0x}, x = the camera
 constexpr GUID kCamClsid[kCams] = {
     {0x6c1a5e70, 0x3b1d, 0x4e8a, {0x9c, 0x27, 0x1f, 0x0d, 0x5a, 0x4b, 0x7e, 0x00}},
@@ -28,6 +29,7 @@ constexpr GUID kCamClsid[kCams] = {
     {0x6c1a5e70, 0x3b1d, 0x4e8a, {0x9c, 0x27, 0x1f, 0x0d, 0x5a, 0x4b, 0x7e, 0x03}},
     {0x6c1a5e70, 0x3b1d, 0x4e8a, {0x9c, 0x27, 0x1f, 0x0d, 0x5a, 0x4b, 0x7e, 0x04}},
     {0x6c1a5e70, 0x3b1d, 0x4e8a, {0x9c, 0x27, 0x1f, 0x0d, 0x5a, 0x4b, 0x7e, 0x05}},
+    {0x6c1a5e70, 0x3b1d, 0x4e8a, {0x9c, 0x27, 0x1f, 0x0d, 0x5a, 0x4b, 0x7e, 0x06}},
 };
 
 constexpr uint32_t kMagic = 0x43564C49;  // "ILVC"

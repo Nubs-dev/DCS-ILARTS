@@ -76,11 +76,13 @@ local state = nil   -- per-mission state; nil when idle/disabled
 -- and down of pan_ramp s, and it only starts a move when the aircraft is pan_deadband deg off its aim - so the
 -- aircraft is not always centred. pan_only = 'right' / 'left': while tracking it only pans that way in the
 -- picture (the island camera never swings left to meet the aircraft at the round down; it waits for it).
--- views = { { name, pos, look, fov }, ... }: positions the camera can be put at (the viewer picks one; the first
--- at the start). A camera with views takes pos / look / fov from the view shown.
+-- views = { { name, pos, look, fov, hangar }, ... }: positions the camera can be put at (the viewer picks one; the
+-- first at the start). A camera with views takes pos / look / fov from the view shown. hangar = true: a hangar
+-- deck position (grouped apart in the viewer; it never tracks).
 -- To tune a camera while DCS runs, put a file ILARTS-cameras.lua in Saved Games\DCS\Config that returns a
--- table like CAMERAS (same names - a camera's or a view's; only the fields to change); it is re-read whenever
--- it changes.
+-- table like CAMERAS (same names - a camera's or a view's; only the fields to change); it is re-read within
+-- 0.5 s of a change, and a field taken out of it goes back to this table's value. The viewer's DEVELOPER
+-- switch (SETTINGS) writes a section of that file from its camera tuning panel.
 local EXTRA_CAMERAS = true
 local CAMERAS = {
     -- island: where the user put it on 2026-11-13 (port face of the island, 9 m above the deck), framed on the
@@ -106,6 +108,20 @@ local CAMERAS = {
         { name = 'WAIST BUBBLE', pos = { -21.8, 21.4, -37.4 }, look = { 48.4, 21.4, 33.8 }, fov = 60 }, -- 45 deg: forward, across the waist
         { name = 'ELEVATOR 3', pos = { -84.1, 21.4, 39.4 }, look = { 12.3, 21.4, 12.8 }, fov = 60 },    -- 345 deg: forward past the island
         { name = 'JUNKYARD', pos = { -81.2, 21.1, 39.0 }, look = { 15.1, 21.1, 12.1 }, fov = 60 },      -- 344 deg
+        -- Hangar bay (2026-11-18, from DCS's hangar model: docs/FINDINGS.md "Hangar deck geometry"). Floor y = 8.71,
+        -- the beams' undersides ~15.5 and the lamps down to 14.9 in the model. The positions below were set by eye in DCS
+        -- with the viewer's tuning panel on 2026-11-18 (about 17 m: the model's figures put the cameras in the walls).
+        -- Bays: aft x -130..-64, middle -61..3, forward 6..60 (fire door leaves stowed at z +-12.7..17.8 between
+        -- them). Elevator doorways (starboard, z ~+16): 1 x 16.5..38.2, 2 -30.8..-9.1, 3 -109.8..-88.2; elevator 4
+        -- (port, z ~-16) -115.5..-94.8. Inner walls at z -18 (port) and +17 (starboard).
+        -- hangar = true: listed under HANGAR DECK in the viewer, and never follows anything (no AUTO: nothing to
+        -- track from below the flight deck); the joystick still turns it.
+        { name = 'HANGAR FWD', hangar = true, pos = { 48.2, 17.1, 0.0 }, look = { -60.0, -7.0, 0.0 }, fov = 50 },     -- forward end, aft down the hangar
+        { name = 'HANGAR AFT', hangar = true, pos = { -126.2, 17.0, -5.0 }, look = { -20.0, -14.5, 0.0 }, fov = 50 },  -- aft bulkhead, forward
+        { name = 'HANGAR EL 1', hangar = true, pos = { 27.4, 17.1, -17.3 }, look = { 27.4, 12.0, -3.5 }, fov = 65 }, -- port wall
+        { name = 'HANGAR EL 2', hangar = true, pos = { -20.0, 16.5, -17.3 }, look = { -20.0, 12.5, -5.0 }, fov = 65 }, -- port wall
+        { name = 'HANGAR EL 3', hangar = true, pos = { -99.0, 16.9, -15.3 }, look = { -99.0, 12.5, -3.0 }, fov = 65 }, -- port wall, over elevator 4's door
+        { name = 'HANGAR EL 4', hangar = true, pos = { -105.2, 17.0, 15.3 }, look = { -105.2, 12.5, 4.0 }, fov = 65 }, -- over elevator 3's door
     } },
 }
 
@@ -142,6 +158,13 @@ local AUTO_LSO_VIEW = true
 -- Start ILARTS.exe (the viewer) when sharing starts, unless it is already running. The window opens without
 -- taking the keyboard focus from DCS. Set false to start the viewer yourself (any time; order is free).
 local AUTO_START_VIEWER = true
+
+-- Benchmark (ILARTS: SETTINGS > Benchmark, [benchmark] next_mission in ILARTS.ini). When it is armed at a mission
+-- start, the hook starts nothing of ILARTS until the viewer has measured DCS with the hook alone (stage 1); then it
+-- starts as usual and the viewer runs the other stages (cameras, recording) and writes the report. No viewer within
+-- BENCH_VIEWER_WAIT s: ILARTS starts as usual and the benchmark is switched off.
+local BENCHMARK = true
+local BENCH_VIEWER_WAIT = 60
 local CMD_VIEW_LSO, CMD_VIEW_COCKPIT = 131, 7
 local AUTO_LSO_BACK_DELAY, AUTO_LSO_TIMEOUT = 0.5, 8
 
@@ -162,9 +185,12 @@ local function isMultiplayer() return API.isMultiplayer and API.isMultiplayer() 
 -- Multiplayer: the name of the unit in your slot (world.getPlayer() only works in single player), or
 -- nil as a spectator / in a non-aircraft role. Aircraft slot IDs are the unit's mission ID ('id' or
 -- 'id_seat' for multi-seat units).
-local function myUnitName()
+local function mySlotUnitId()
     local okp, slot = pcall(net.get_player_info, net.get_my_player_id(), 'slot')
-    local id = okp and tonumber(tostring(slot or ''):match('^(%d+)'))
+    return okp and tonumber(tostring(slot or ''):match('^(%d+)')) or nil
+end
+local function myUnitName()
+    local id = mySlotUnitId()
     if not id or not API.getUnitProperty or not API.UNIT_NAME then return nil end
     local okn, name = pcall(API.getUnitProperty, id, API.UNIT_NAME)
     return okn and type(name) == 'string' and name ~= '' and name or nil
@@ -197,6 +223,32 @@ local function hasAircraft()
         if ok then return d ~= nil end
     end
     return net.dostring_in('export', 'return tostring(LoGetSelfData() ~= nil)') == 'true'
+end
+
+-- From the mission file (host and client alike), cached per mission: each plane / helicopter unit's group and its
+-- number in that group (its place in the editor's list: 1-1 = 1, 1-2 = 2 ...), and each group's units (mission ids).
+local function missionUnits()
+    if state.missionUnits then return state.missionUnits end
+    local mu = { byName = {}, groups = {} }
+    state.missionUnits = mu
+    local okm, m = pcall(API.getCurrentMission)
+    local mis = okm and type(m) == 'table' and m.mission
+    if not (mis and mis.coalition) then return mu end
+    for _, side in pairs(mis.coalition) do
+        for _, country in ipairs(type(side) == 'table' and side.country or {}) do
+            for _, cat in ipairs({ 'plane', 'helicopter' }) do
+                for _, g in ipairs(country[cat] and country[cat].group or {}) do
+                    local list = {}
+                    for i, u in ipairs(g.units or {}) do
+                        if u.name then mu.byName[u.name] = { group = tostring(g.name or ''), n = i } end
+                        list[#list + 1] = { id = u.unitId, n = i }
+                    end
+                    if g.name then mu.groups[tostring(g.name)] = list end
+                end
+            end
+        end
+    end
+    return mu
 end
 
 -- Q4 overlay: Supercarrier's PLAT symbology (PLATCameraUI.lua) runs in a private Lua state that only
@@ -256,6 +308,10 @@ local CLOUD_REBASE_PERIOD = 15
 -- on-screen text), 'observe' = installed but never changes anything, 'off' = not installed.
 local PLAT_ORIGIN = 'on'
 local PLAT_ORIGIN_AB_PERIOD = 15
+-- Your own aircraft's canopy in the PLAT and the extra cameras. While you sit in the cockpit DCS hides your
+-- external model's canopy, frame and pilot (draw argument 114) in every view of the frame; true draws them in
+-- ILARTS's views as seen from outside (DCS's own views unchanged). Needs PLAT_ORIGIN. false = not installed.
+local OWN_CANOPY = true
 -- true: while on the F10 map, run DCS's world object search for the PLAT (experiment, see map_objects.h).
 -- Set to false if DCS crashes or the map misbehaves.
 local MAP_OBJECTS = true
@@ -264,11 +320,14 @@ local FEED_PERIOD = 0.1
 -- Runs in the mission scripting state ('server'). Prepended: cx, cy, cz (PLAT camera position),
 -- doff (Supercarrier's distance reference point, metres forward of the camera along the landing
 -- axis), la0, la1, lw (landing area: along-axis range and half-width, metres, relative to the camera),
--- keepShip, startRange, mishapRange, trks (unit names of the aircraft whose passes are being followed).
+-- keepShip, startRange, mishapRange, trks (unit names of the aircraft whose passes are being followed),
+-- me, mp (the unit in your multiplayer slot or nil; mp = multiplayer: without a slot unit you have no aircraft).
 -- Returns 'k=v' tokens: ship values, foul flag, camera in ship frame, the aircraft the overlay follows,
 -- near = airplanes within 800 m and 300 m up ("name|al|lat|ht|air|relspeed": the catapults' tracking),
--- cands = airborne airplanes astern within startRange ("name|al|lat|ht|closure|range|type|player|callsign",
--- ';' separated, names %-encoded), trks = the followed ones ("name|al|lat|ht|air|relspeed|range|closure" or
+-- cands = airborne airplanes astern within startRange ("name|al|lat|ht|closure|range|type|player|callsign|group|number",
+-- ';' separated, names %-encoded; number = the unit's place in its group), me = your aircraft
+-- ("name|group|number": world.getPlayer() in single player, the slot's unit in multiplayer; absent = none),
+-- trks = the followed ones ("name|al|lat|ht|air|relspeed|range|closure" or
 -- "name|gone"), marks = LSO grades since the last call ("unit|comment") and mishaps = crashes / ejections
 -- near the carrier since the last call ("kind|who|unit"), both from EVENT_INSTALL's handler.
 local FEED_QUERY = [==[
@@ -344,8 +403,9 @@ local ok, res = pcall(function()
                 local cl = -((v.x - sv.x) * dx + (v.y - sv.y) * dy + (v.z - sv.z) * dz) / math.max(r, 1)
                 local okp, pn = pcall(u.getPlayerName, u)
                 local okc, cs = pcall(u.getCallsign, u)
-                approach[#approach + 1] = string.format('%s|%.1f|%.1f|%.1f|%.1f|%.1f|%s|%s|%s', enc(u:getName()), al, lat, ht, cl, r,
-                  enc(u:getTypeName()), enc(okp and pn or ''), enc(okc and cs or ''))
+                local okn, num = pcall(u.getNumber, u)
+                approach[#approach + 1] = string.format('%s|%.1f|%.1f|%.1f|%.1f|%.1f|%s|%s|%s|%s|%d', enc(u:getName()), al, lat, ht, cl, r,
+                  enc(u:getTypeName()), enc(okp and pn or ''), enc(okc and cs or ''), enc(gr:getName()), okn and tonumber(num) or 0)
               end
             end
             if cat == Group.Category.AIRPLANE and math.abs(al) < 800 and math.abs(lat) < 800 and ht < 300 and ht > -15 then
@@ -419,6 +479,16 @@ local ok, res = pcall(function()
     end
   end
   if #followed > 0 then put('trks', table.concat(followed, ';')) end
+  local meU
+  if me then meU = Unit.getByName(me) elseif not mp and world.getPlayer then meU = world.getPlayer() end
+  if meU and meU:isExist() then
+    local d = meU:getDesc() or {}
+    if d.category == Unit.Category.AIRPLANE or d.category == Unit.Category.HELICOPTER then
+      local okg, gn = pcall(function() return meU:getGroup():getName() end)
+      local okn, num = pcall(meU.getNumber, meU)
+      put('me', enc(meU:getName()) .. '|' .. enc(okg and gn or '') .. '|' .. string.format('%d', okn and tonumber(num) or 0))
+    end
+  end
   if #approach > 0 then put('cands', table.concat(approach, ';')) end
   if #near > 0 then put('near', table.concat(near, ';')) end
   local mk = G.__ilarts_marks
@@ -508,10 +578,12 @@ local function feedQuery()
         f.eventsInstalled = true
         diag.log('EVENTS handler for LSO grades and mishaps: ' .. tostring(net.dostring_in('server', EVENT_INSTALL)))
     end
+    local mp = isMultiplayer()
+    local me = mp and myUnitName() or nil
     local code = string.format('local cx, cy, cz = %.3f, %.3f, %.3f\nlocal doff, la0, la1, lw = %.3f, %.1f, %.1f, %.1f\nlocal keepShip = %s\n' ..
-                               'local startRange, mishapRange = %.0f, %.0f\nlocal trks = {%s}\n',
+                               'local startRange, mishapRange = %.0f, %.0f\nlocal trks = {%s}\nlocal me, mp = %s, %s\n',
                                cx, cy, cz, f.distOff, f.la0, f.la1, f.lw, state.sel and 'true' or 'false', PASS_START_RANGE,
-                               MISHAP_RANGE, table.concat(names, ',')) .. FEED_QUERY
+                               MISHAP_RANGE, table.concat(names, ','), me and string.format('%q', me) or 'nil', mp and 'true' or 'false') .. FEED_QUERY
     local res = tostring(net.dostring_in('server', code))
     if not res:match('^hdg=') then return nil, res end
     local q = {}
@@ -537,7 +609,16 @@ local function feedQuery()
         local name = dec(a[1])
         q.candList[#q.candList + 1] = { key = name, name = name, al = tonumber(a[2]), lat = tonumber(a[3]), ht = tonumber(a[4]),
                                         c = tonumber(a[5]), r = tonumber(a[6]), type = dec(a[7]), pname = a[8] ~= '' and dec(a[8]) or nil,
-                                        callsign = (a[9] or '') ~= '' and dec(a[9]) or nil }
+                                        callsign = (a[9] or '') ~= '' and dec(a[9]) or nil, group = dec(a[10] or ''), num = tonumber(a[11]) }
+    end
+    -- your aircraft; in multiplayer the slot's unit before it is in the world counts too (from the mission file)
+    if q.me then
+        local m = {}
+        for x in (tostring(q.me) .. '|'):gmatch('([^|]*)|') do m[#m + 1] = x end
+        q.me = { key = dec(m[1]), name = dec(m[1]), group = dec(m[2] or ''), n = tonumber(m[3]) or 0 }
+    elseif me then
+        local mu = missionUnits().byName[me]
+        q.me = { key = me, name = me, group = mu and mu.group or '', n = mu and mu.n or 0 }
     end
     q.markList, q.mishapList = {}, {}
     for _, m in ipairs(recs(q.marks)) do q.markList[#q.markList + 1] = { name = dec(m[1]), comment = dec(m[2]) or '' } end
@@ -652,6 +733,37 @@ local function missionWind()
     return { x = s * math.cos(d), y = 0, z = s * math.sin(d) }
 end
 
+-- Your aircraft as a client: the slot's unit. Its key is the export interface's object id (the unit's runtime id), as the
+-- candidates' keys are; group and number come from the mission file, else the group from the export interface.
+local function clientMe(objs)
+    local id = mySlotUnitId()
+    local name = myUnitName()
+    if not (id and name) then return nil end
+    local rid
+    if API.UNIT_RUNTIME_ID then
+        local okr, r = pcall(API.getUnitProperty, id, API.UNIT_RUNTIME_ID)
+        rid = okr and tonumber(r) or nil
+    end
+    local o = rid and (objs[rid] or objs[tostring(rid)])
+    local mu = missionUnits().byName[name]
+    return { key = rid and tostring(rid) or name, name = name, group = mu and mu.group or tostring(o and o.GroupName or ''), n = mu and mu.n or 0 }
+end
+
+-- A client's candidate's number in its group (the export interface has none): the mission file's unit of that name in
+-- that group, else the group's unit whose runtime id is the object's.
+local function missionNumber(group, key, name)
+    local mu = missionUnits()
+    local byName = name and mu.byName[name]
+    if byName and byName.group == group then return byName.n end
+    if API.getUnitProperty and API.UNIT_RUNTIME_ID then
+        for _, u in ipairs(mu.groups[group] or {}) do
+            local okr, r = pcall(API.getUnitProperty, u.id, API.UNIT_RUNTIME_ID)
+            if okr and r and tostring(tonumber(r)) == tostring(key) then return u.n end
+        end
+    end
+    return 0
+end
+
 -- Same fields as FEED_QUERY, from the export interface. Velocities by differencing successive calls.
 local function feedQueryClient(cx, cy, cz)
     local objs, err = worldObjects()
@@ -732,7 +844,8 @@ local function feedQueryClient(cx, cy, cz)
                 local r = math.sqrt(dx * dx + dy * dy + dz * dz)
                 if r < PASS_START_RANGE then
                     q.candList[#q.candList + 1] = { key = key, name = tostring(o.UnitName or o.Name), al = al, lat = lat, ht = ht, r = r,
-                        c = -((v.x - sv.x) * dx + (v.y - sv.y) * dy + (v.z - sv.z) * dz) / math.max(r, 1), type = tostring(o.Name) }
+                        c = -((v.x - sv.x) * dx + (v.y - sv.y) * dy + (v.z - sv.z) * dz) / math.max(r, 1), type = tostring(o.Name),
+                        group = tostring(o.GroupName or '') }
                 end
             end
             if o.Type.level2 == 1 and math.abs(al) < 800 and math.abs(lat) < 800 and ht < 300 and ht > -15 then
@@ -757,6 +870,7 @@ local function feedQueryClient(cx, cy, cz)
         if now - s.t > 30 then f.seen[id] = nil end
     end
     f.prevPos = cur
+    q.me = clientMe(objs)
     if best then
         local o, p, v, al, lat, ht, air, oid = unpack(best)
         local dx, dy, dz = p.x - cx, p.y - cy, p.z - cz
@@ -999,6 +1113,20 @@ local function passFollow(now, c, t)
     if now - c.t0 > PASS_MAX_S then return passEnd(now, c, 'other', 'timed out') end
 end
 
+-- Whose pass it is, for the viewer's automatic recording filter (Header::passFlags): 1 = your aircraft (with 2 and 4),
+-- 2 = your section (your 2-ship element: units 1-2, 3-4 ... of your group), 4 = your flight (your group), 0 = none of
+-- these, or you have had no aircraft this mission. Against your aircraft now (state.me), so a slot change applies to
+-- passes under way; without one (you landed and went to the LSO station, or released the slot) against the last one
+-- you had this mission (state.meLast: unit, group name and number, so it works after the group is gone too).
+local function passWhose(c)
+    local me = state.me or state.meLast
+    if not me then return 0 end
+    if c.key == me.key then return 7 end
+    if me.group == '' or c.group ~= me.group then return 0 end
+    if (me.n or 0) > 0 and (c.num or 0) > 0 and math.ceil(me.n / 2) == math.ceil(c.num / 2) then return 6 end
+    return 4
+end
+
 -- Every feed tick: follow the passes under way, start one for every other airplane that comes into the
 -- picture (closely spaced aircraft each get their own; straight-in aircraft only inside PASS_STRAIGHT_RANGE),
 -- and let an aircraft whose pass ended start a new one only after it has left the start window.
@@ -1029,12 +1157,14 @@ local function passTick(now, q)
                 local info = missionCueInfo(state.sel.name)
                 local c = { id = P.id, key = a.key, name = a.name, type = tostring(a.type), board = info.board[a.name] or '',
                             pilot = a.pname or a.name, carrier = state.sel.name, carrierType = state.sel.type, t0 = now, range = a.r,
-                            callsign = a.pname or a.callsign or a.name, case = recoveryCase(turnedIn) }
+                            callsign = a.pname or a.callsign or a.name, case = recoveryCase(turnedIn), group = a.group or '',
+                            num = a.num or (state.client and missionNumber(a.group or '', a.key, a.name)) or 0 }
                 P.cur[a.key] = c
                 state.feed.trackIds = state.feed.trackIds or {}
                 state.feed.trackIds[a.key] = true
-                diag.log(string.format('PASS %d start: %s %s %s (%s) at %.0f m, %s, case %d', c.id, c.type, c.board ~= '' and c.board or '-',
-                                       c.pilot, tostring(c.callsign), a.r, turnedIn and 'turned in' or 'straight in', c.case))
+                diag.log(string.format('PASS %d start: %s %s %s (%s) at %.0f m, %s, case %d, group %s #%d, whose %d', c.id, c.type,
+                                       c.board ~= '' and c.board or '-', c.pilot, tostring(c.callsign), a.r,
+                                       turnedIn and 'turned in' or 'straight in', c.case, c.group, c.num, passWhose(c)))
             end
         end
     end
@@ -1047,6 +1177,7 @@ local function passTick(now, q)
 end
 
 local function passLines(lines)
+    if state.meKnown then lines[#lines + 1] = 'own_aircraft=' .. ((state.me or state.meLast) and 1 or 2) end
     local P = state.passes
     if not P then return end
     local function clean(t) return (tostring(t or ''):gsub('[|\r\n]', ' ')) end
@@ -1060,9 +1191,9 @@ local function passLines(lines)
     lines[#lines + 1] = 'pass_epoch=' .. P.epoch
     lines[#lines + 1] = 'passes=' .. #list
     for i, c in ipairs(list) do
-        lines[#lines + 1] = string.format('pass%d=%d|%d|%d|%.0f|%s|%s|%s|%s|%d|%s|%s|%s', i, c.id, c.result and 0 or 1, c.result or 0,
+        lines[#lines + 1] = string.format('pass%d=%d|%d|%d|%.0f|%s|%s|%s|%s|%d|%s|%s|%s|%d', i, c.id, c.result and 0 or 1, c.result or 0,
                                           c.range or 0, clean(c.type), clean(c.board), clean(c.pilot), clean(c.carrierType),
-                                          c.case or 0, clean(c.callsign or c.pilot), clean(c.grade), clean(c.wire))
+                                          c.case or 0, clean(c.callsign or c.pilot), clean(c.grade), clean(c.wire), passWhose(c))
     end
 end
 
@@ -1117,6 +1248,7 @@ local function publishSymbology(now, q, missionTime)
     lines[#lines + 1] = 'gateFov=17'
     lines[#lines + 1] = 'gateDistance=291.3'
     lines[#lines + 1] = 'gateDeltaH=-2.826'
+    if state.missionName and state.missionName ~= '' then lines[#lines + 1] = 'mission_name=' .. state.missionName end
     passLines(lines)
     diag.share_symbology(table.concat(lines, '\n'))
 end
@@ -1156,6 +1288,16 @@ local function feedPush(now)
         return
     end
     f.lastQueryErr = nil
+    -- your aircraft now; the last one stays your affiliation for the rest of the mission (state is per mission)
+    state.me, state.meKnown = q.me, true
+    if q.me then state.meLast = { key = q.me.key, name = q.me.name, group = q.me.group, n = q.me.n } end
+    local meText = q.me and string.format('%s (group %s #%d)', tostring(q.me.name), tostring(q.me.group), q.me.n or 0)
+                   or state.meLast and string.format('none, earlier %s (group %s #%d)', tostring(state.meLast.name), tostring(state.meLast.group),
+                                                     state.meLast.n or 0) or 'none'
+    if meText ~= f.lastMe then
+        f.lastMe = meText
+        diag.log('PASS your aircraft: ' .. meText)
+    end
     if state.sel then
         local okp, errp = pcall(passTick, now, q)
         if not okp and errp ~= f.lastPassErr then
@@ -1387,15 +1529,94 @@ local function compatGate(now)
         diag.log(msg)
         local okA, whyA = diag.share_announce()
         if not okA then diag.log('COMPAT announce failed: ' .. tostring(whyA)) end
-        if AUTO_START_VIEWER and diag.launch_viewer then pcall(diag.launch_viewer) end
         return false
     end
     if st == 'matched' then dcslog('DCS ' .. tostring(ver) .. ': not the verified build, but the code the mod depends on is unchanged') end
     return true
 end
 
+-- Benchmark (BENCHMARK above; DLL bench.h). The player as the benchmark sees them: slot and whether in an aircraft.
+local function benchWho()
+    local slot = isMultiplayer() and mySlotUnitId() or nil
+    return (slot and ('slot ' .. slot) or 'no slot') .. (hasAircraft() and ', in an aircraft' or ', no aircraft')
+end
+local function benchInfo()
+    local t = { 'mission=' .. tostring(state.missionName or ''):gsub('[\r\n]', ' ') }
+    local ex = rawget(_G, 'Export')
+    local okS, d = false, nil
+    if ex and ex.LoGetSelfData then okS, d = pcall(ex.LoGetSelfData) end
+    t[#t + 1] = 'aircraft=' .. (okS and type(d) == 'table' and tostring(d.Name or '') or '')
+    t[#t + 1] = 'role=' .. (not isMultiplayer() and 'single player' or state.client and 'multiplayer client' or 'multiplayer host')
+    t[#t + 1] = 'player=' .. benchWho()
+    return table.concat(t, '\n')
+end
+-- Once a second, before anything starts. True while ILARTS is held back (stage 1: the hook alone).
+local function benchStep(now)
+    local b = state.bench
+    if b.phase == 'arming' then
+        b.who = benchWho()
+        local ok, why = diag.bench('begin', benchInfo())
+        if not ok then
+            diag.log('BENCH not started: ' .. tostring(why))
+            state.bench = nil
+            return false
+        end
+        b.phase, b.t0 = 'hold', now
+        diag.log('BENCH armed: ILARTS waits until the viewer has measured DCS with the hook alone')
+    end
+    local paused = API.getPause and API.getPause() or false
+    diag.bench('tick', paused)  -- the viewer stops its clocks while DCS is paused
+    if paused ~= b.paused then
+        b.paused = paused
+        diag.log('BENCH ' .. (paused and 'DCS paused' or 'DCS running'))
+    end
+    local who = benchWho()
+    if who ~= b.who then  -- the viewer restarts stage 1 (still holding) or stops the run
+        b.who = who
+        diag.bench('who', benchInfo())
+        diag.log('BENCH player: ' .. who)
+    end
+    local cmd, age, stage = diag.bench('poll')
+    if stage ~= b.stage then
+        b.stage = stage
+        if stage and stage ~= '' then diag.log('BENCH stage: ' .. stage) end
+    end
+    if cmd == 'done' then
+        diag.bench('ended', 'run over')
+        state.bench = nil
+        return false
+    end
+    local seen = tonumber(age)  -- s since the viewer last looked (nil: not yet)
+    if b.phase == 'hold' then
+        if cmd == 'release' then
+            b.phase = 'run'
+            diag.bench('release')
+            return false
+        end
+        if (not seen and now - b.t0 > BENCH_VIEWER_WAIT) or (seen and seen > 20) then
+            diag.log('BENCH no viewer ' .. (seen and ('for ' .. seen .. ' s') or ('after ' .. BENCH_VIEWER_WAIT .. ' s')) ..
+                     ': ILARTS starts as usual; the benchmark is switched off')
+            diag.bench('ended', 'no viewer')
+            diag.bench('disarm')
+            state.bench = nil
+            return false
+        end
+        return true
+    end
+    if seen and seen > 30 then  -- the viewer went away during the run (it puts its own things back when it returns)
+        diag.log('BENCH the viewer stopped looking (' .. seen .. ' s): run over')
+        diag.bench('ended', 'no viewer')
+        state.bench = nil
+    end
+    return false
+end
+
 local function step(now)
     if not compatGate(now) then return end
+    if state.bench then
+        state.firstStep = state.firstStep or now  -- START_DELAY runs while the benchmark holds ILARTS back
+        if benchStep(now) then return end
+    end
     if not state.started then
         -- Nothing on the GPU while DCS is still loading the mission: sharing, the PLAT's second scene render and the
         -- cameras wait START_DELAY s from the first frame. (2026-11-14/15: twice the GPU faulted - NVIDIA "FECS
@@ -1411,10 +1632,6 @@ local function step(now)
         dcslog('sharing: ' .. (started and 'started' or ('refused: ' .. tostring(why))))
         diag.log('sharing: ' .. (started and 'started' or ('refused: ' .. tostring(why))))
         state.nextStatus = now + STATUS_PERIOD
-        if state.sharing and AUTO_START_VIEWER and diag.launch_viewer then
-            local okv, rv = pcall(diag.launch_viewer)
-            dcslog('viewer: ' .. tostring(rv))
-        end
         if KEEP_PLAT and diag.keep_plat then
             local r, msg = diag.keep_plat(true)
             state.keepPlat = r and true or false
@@ -1587,6 +1804,19 @@ local function step(now)
             end
         end
     end
+    -- your own aircraft's canopy in the PLAT and the extra cameras (needs the PLAT origin hooks: they list the views)
+    if OWN_CANOPY and state.originOk and diag.own_canopy then
+        if state.canopyOk == nil then
+            local r, why = diag.own_canopy('install')
+            state.canopyOk = r and true or false
+            diag.log('OWNCANOPY install: ' .. tostring(r and 'ok' or why))
+            if state.canopyOk then diag.own_canopy('on') end
+        end
+        if state.canopyOk and now >= (state.canopyNext or 0) then
+            state.canopyNext = now + 5
+            vlog('OWNCANOPY ' .. tostring(diag.own_canopy('stats')))
+        end
+    end
     if GLIDESLOPE_MEMSCAN and gsAngle and not state.memscanStart and API.getModelTime() > 30 then
         state.memscanStart = true
         diag.log('GLIDESLOPE memscan (mission +30 s): ' .. tostring(diag.memscan(gsAngle, 'mission')))
@@ -1648,6 +1878,21 @@ function callbacks.onMissionLoadBegin()
     if not ok then diag.log('GLIDESLOPE error: ' .. tostring(err)) end
 end
 
+-- The mission's name for the viewer (its recordings folder): DCS.getMissionName(), else the mission file's name.
+local function missionName()
+    local name
+    if API.getMissionName then
+        local ok, n = pcall(API.getMissionName)
+        if ok and type(n) == 'string' then name = n end
+    end
+    if (not name or name == '') and API.getMissionFilename then
+        local ok, f = pcall(API.getMissionFilename)
+        if ok and type(f) == 'string' then name = f:match('([^\\/]+)$') end
+    end
+    name = tostring(name or ''):gsub('%.[mM][iI][zZ]$', ''):gsub('[%c|]', ' ')
+    return name
+end
+
 function callbacks.onSimulationStart()
     local mp = isMultiplayer()
     local client = mp and not (API.isServer and API.isServer())
@@ -1659,6 +1904,16 @@ function callbacks.onSimulationStart()
     end
     if mp then diag.log(client and 'multiplayer session, client (export data source)' or 'multiplayer session, hosting') end
     state = { next = API.getRealTime() + FIRST_DELAY, started = false, sharing = false, client = client }
+    if BENCHMARK and diag.bench and diag.bench('armed') then
+        state.bench = { phase = 'arming' }  -- step() holds ILARTS back until the viewer has measured stage 1
+        diag.log('BENCH armed for this mission')
+    end
+    -- Open ILARTS straight away: a separate process, nothing added to DCS's rendering. It shows "Waiting for DCS"
+    -- until sharing starts (START_DELAY s later) and shows the compatibility notice if the mod switches itself off.
+    if AUTO_START_VIEWER and diag.launch_viewer then
+        local okv, rv = pcall(diag.launch_viewer)
+        dcslog('viewer: ' .. tostring(rv))
+    end
     if PLAT_FEED then
         state.feed = { err = {}, speedKey = 'g', calls = 0, nextPush = 0,
                        -- Supercarrier's distance is measured to a point 4.6 m forward of the PLAT camera on the
@@ -1669,7 +1924,7 @@ function callbacks.onSimulationStart()
                        la0 = -160, la1 = 120, lw = 13,
                        foulHalfPeriod = 0.32 }                     -- Supercarrier flashes the "F" every 19 frames at 60 fps
     end
-    if CLOUDS_PROBE and diag.clouds then
+    if CLOUDS_PROBE and diag.clouds and not state.bench then  -- (benchmark: step() installs it once ILARTS starts)
         local r, why = diag.clouds('install')
         state.cloudsOk = r and true or false
         state.cloudsDumped = {}
@@ -1677,6 +1932,7 @@ function callbacks.onSimulationStart()
     end
     local okm, m = pcall(API.getCurrentMission)
     state.missionStart = okm and type(m) == 'table' and m.mission and tonumber(m.mission.start_time) or nil
+    state.missionName = missionName()
 end
 
 -- DCS's multiplayer game events (crash, eject, pilot_death ...): used as a client only (clientGameEvent).
@@ -1687,12 +1943,14 @@ end
 
 function callbacks.onSimulationStop()
     if state then
+        if state.bench then pcall(diag.bench, 'ended', 'mission ended') end
         if state.keepPlat then
             local _, msg = diag.keep_plat(false)
             diag.log('keep PLAT stop: ' .. tostring(msg))
         end
         if state.uiInstalled then pcall(diag.plat_ui, 'reset') end
         if state.cloudsOk then pcall(diag.clouds, 'remove') end
+        if state.canopyOk then pcall(diag.own_canopy, 'remove') end
         if state.originOk then pcall(diag.plat_origin, 'remove') end
         if state.mapObjOk then pcall(diag.map_objects, 'remove') end
         if state.hullFixOk then pcall(diag.hull_refresh, 'remove') end
@@ -2118,6 +2376,7 @@ function cameraTrack(now, q)
             end
             local target = TRACK_TARGETS[mode]
             if mode == 0 and c.track then target = 'landing' end
+            if c.views and c.views[c.view or 1] and c.views[c.view or 1].hangar then target = nil end  -- a hangar position: never
             if target == 'nearest' then
                 local best, bd
                 for k, cat in ipairs(CATAPULTS) do
@@ -2153,10 +2412,79 @@ local function applyView(c)
     c.fov = v.fov or c.baseFov
 end
 
+-- The last argument names what the camera shows (the view, else the camera): the DLL publishes the pose under that
+-- name (Header::camPose) for the viewer's tuning panel.
 local function sendCamera(i, c)
     applyView(c)
+    local shown = c.views and c.views[c.view] and c.views[c.view].name or c.name
     diag.extra_cam('set', i - 1, c.pos[1], c.pos[2], c.pos[3], c.look[1], c.look[2], c.look[3], c.fov or 60, c.aspect or 4 / 3,
-                   c.source or (29 + i), c.type or 0)
+                   c.source or (29 + i), c.type or 0, tostring(shown))
+end
+
+-- Every camera's settings to the DLL (at the start, and after the tuning file changed).
+local function configureCameras(C)
+    C.configured = true
+    for i, c in ipairs(C.list) do
+        sendCamera(i, c)
+        -- pan_only: 'right' / 'left' as seen in the picture of a camera that looks aft (right = toward port)
+        diag.extra_cam('ptz', i - 1, c.pan_rate or 60, c.pan_ramp or 0.3, c.pan_deadband or 8,
+                       c.pan_only == 'right' and 1 or c.pan_only == 'left' and -1 or 0)
+    end
+end
+
+-- The tuning file, Saved Games\DCS\Config\ILARTS-cameras.lua, checked every 0.5 s (its text: lfs's modification
+-- time has a resolution of 1 s, and the viewer's tuning panel writes more often than that). Each read starts from
+-- the table as written: every field an earlier read set is put back first (C.orig), so an entry taken out of the
+-- file (the panel's RESET) is undone at once. The cameras are then sent again, so a slot already showing a tuned
+-- view moves without a view change.
+local function cameraTuning(C, now)
+    if now < (C.fileAt or 0) then return end
+    C.fileAt = now + 0.5
+    local okl, lfs = pcall(require, 'lfs')
+    if not (okl and lfs and lfs.writedir) then return end
+    local path = lfs.writedir() .. 'Config\\ILARTS-cameras.lua'
+    local f = io.open(path, 'rb')
+    local text = f and f:read('*a')
+    if f then f:close() end
+    if text == C.fileText then return end
+    C.fileText = text
+    local t = {}
+    if text then
+        if text:sub(1, 3) == '\239\187\191' then text = text:sub(4) end  -- a UTF-8 BOM (Lua 5.1 cannot read one)
+        local chunk, err = loadstring(text, '=ILARTS-cameras.lua')
+        local okf, r = pcall(chunk or function() error(err, 0) end)
+        if not (okf and type(r) == 'table') then
+            diag.log('EXTRACAM ' .. path .. ' not usable: ' .. tostring(r))
+            return  -- keep what the last good read set
+        end
+        t = r
+    end
+    C.orig = C.orig or {}  -- [object] = { [field] = { value as written in CAMERAS } }
+    for obj, fields in pairs(C.orig) do
+        for k, v in pairs(fields) do obj[k] = v[1] end
+    end
+    local function set(obj, o)
+        local keep = C.orig[obj] or {}
+        C.orig[obj] = keep
+        for k, v in pairs(o) do
+            if k ~= 'name' then
+                if not keep[k] then keep[k] = { obj[k] } end
+                obj[k] = v
+            end
+        end
+    end
+    for _, o in ipairs(t) do  -- in the file's order: a later entry for the same name wins
+        if type(o) == 'table' and o.name then
+            for _, c in ipairs(C.list) do
+                if c.name == o.name then set(c, o) end
+                for _, v in ipairs(c.views or {}) do  -- a view of a camera, by its name (shared by a pool's slots)
+                    if v.name == o.name then set(v, o) end
+                end
+            end
+        end
+    end
+    configureCameras(C)
+    diag.log('EXTRACAM settings ' .. (text and 'read from ' or 'reset: no ') .. path)
 end
 
 -- Every feed tick: the viewer's view requests (each a new sequence number; one made before the hook started
@@ -2164,6 +2492,7 @@ end
 function cameraViews(now)
     local C = state.cams
     if not (C and C.list and diag.share_camera_view and diag.share_camera_views) then return end
+    if C.configured then cameraTuning(C, now) end
     C.viewSeq = C.viewSeq or {}
     for i, c in ipairs(C.list) do
         if c.views and #c.views > 0 then
@@ -2178,7 +2507,9 @@ function cameraViews(now)
             end
             applyView(c)
             local names = {}
-            for k, v in ipairs(c.views) do names[k] = tostring(v.name):gsub('|', ' ') end
+            for k, v in ipairs(c.views) do  -- '\t' + flags after the name: 'H' = a hangar position (ShareSetCameraViews)
+                names[k] = tostring(v.name):gsub('[|\t]', ' ') .. (v.hangar and '\tH' or '')
+            end
             local text = table.concat(names, '|')
             if text ~= c.viewsText or c.view ~= c.viewShown or now >= (c.viewsAt or 0) then
                 c.viewsText, c.viewShown, c.viewsAt = text, c.view, now + 2
@@ -2188,7 +2519,7 @@ function cameraViews(now)
     end
 end
 
--- Once a second: the cameras' settings (and the tuning file) to the DLL, the viewer's request (which cameras
+-- Once a second: the cameras' settings to the DLL, the viewer's request (which cameras
 -- to render), what DCS made of it (which render targets exist), and the frame rate before / after a change.
 local function cameraTick(now)
     if not (EXTRA_CAMERAS and diag.extra_cam and diag.share_cameras and state.sharing) then return end
@@ -2229,46 +2560,10 @@ local function cameraTick(now)
         for _, v in ipairs(C.fps) do s = s + v end
         return #C.fps > 0 and s / #C.fps or 0
     end
-    -- tuning file: Saved Games\DCS\Config\ILARTS-cameras.lua
-    local okl, lfs = pcall(require, 'lfs')
-    if okl and lfs and now >= (C.fileAt or 0) then
-        C.fileAt = now + 2
-        local path = lfs.writedir() .. 'Config\\ILARTS-cameras.lua'
-        local mod = lfs.attributes and lfs.attributes(path, 'modification')
-        if mod ~= C.fileMod then
-            C.fileMod = mod
-            if mod then
-                local chunk, err = loadfile(path)
-                local okf, t = pcall(chunk or function() error(err) end)
-                if okf and type(t) == 'table' then
-                    for _, o in ipairs(t) do
-                        for _, c in ipairs(C.list) do
-                            if c.name == o.name then
-                                for k, v in pairs(o) do c[k] = v end
-                            end
-                            for _, v in ipairs(c.views or {}) do  -- a view of a camera, by its name
-                                if v.name == o.name then
-                                    for k, x in pairs(o) do v[k] = x end
-                                end
-                            end
-                        end
-                    end
-                    C.configured = nil
-                    diag.log('EXTRACAM settings read from ' .. path)
-                else
-                    diag.log('EXTRACAM ' .. path .. ' not usable: ' .. tostring(t))
-                end
-            end
-        end
-    end
+    -- the tuning file (cameraTuning, then every 0.5 s from cameraViews)
     if not C.configured then
-        C.configured = true
-        for i, c in ipairs(C.list) do
-            sendCamera(i, c)
-            -- pan_only: 'right' / 'left' as seen in the picture of a camera that looks aft (right = toward port)
-            diag.extra_cam('ptz', i - 1, c.pan_rate or 60, c.pan_ramp or 0.3, c.pan_deadband or 8,
-                           c.pan_only == 'right' and 1 or c.pan_only == 'left' and -1 or 0)
-        end
+        cameraTuning(C, now)
+        if not C.configured then configureCameras(C) end
     end
     local avail, why = diag.extra_cam('available')
     if (avail and 'yes' or tostring(why)) ~= C.availText then
@@ -2759,11 +3054,13 @@ function callbacks.onSimulationFrame()
         log.write('ILARTS', log.ERROR, 'step failed, disabling: ' .. tostring(err))
         if state.keepPlat then pcall(diag.keep_plat, false) end
         if state.cloudsOk then pcall(diag.clouds, 'remove') end
+        if state.canopyOk then pcall(diag.own_canopy, 'remove') end
         if state.originOk then pcall(diag.plat_origin, 'remove') end
         if state.mapObjOk then pcall(diag.map_objects, 'remove') end
         if state.hullFixOk then pcall(diag.hull_refresh, 'remove') end
         if state.cams and diag.extra_cam then pcall(diag.extra_cam, 'remove') end
         if state.shipDraw then pcall(diag.lso_camera, 'ship_draw_off') end
+        if state.bench then pcall(diag.bench, 'ended', 'ILARTS stopped (error)') end
         pcall(diag.share_stop)
         state = nil
     end

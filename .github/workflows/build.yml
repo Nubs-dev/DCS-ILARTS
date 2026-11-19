@@ -1,0 +1,128 @@
+# Builds the release packages from this repo's source and, once SignPath is set up, signs them.
+#   Push a tag v<version> (or run it by hand with a version) -> artifact "DCS-ILARTS-<version>" holding
+#   DCS-ILARTS-Setup-<version>.exe, DCS-ILARTS_v<version>.zip (OMM) and ovgme/DCS-ILARTS.zip.
+# Signing (SignPath Foundation, docs/CODE-SIGNING.md) runs only when the repo variable SIGNPATH_ORGANIZATION_ID is
+# set. It signs twice: first ILARTS.exe, ILARTS.dll and ILARTSCam.dll, so every package carries signed binaries,
+# then the installer built from them. Each request waits for an approver in SignPath.
+# Repo settings it reads: variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG;
+# secret SIGNPATH_API_TOKEN. Artifact configurations in SignPath: "binaries" and "installer"
+# (deploy/signpath/*.xml).
+name: Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version (numbers and dots)
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: powershell
+
+jobs:
+  build:
+    if: github.repository == 'Nubs-dev/DCS-ILARTS'
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+      EVENT: ${{ github.event_name }}
+      REF_NAME: ${{ github.ref_name }}
+      INPUT_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          $v = if ($env:EVENT -eq 'push') { $env:REF_NAME.TrimStart('v') } else { $env:INPUT_VERSION }
+          if ($v -notmatch '^\d+(\.\d+)*$') { throw "Version must be numbers and dots: $v" }
+          Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$v"
+
+      - name: Build
+        run: |
+          cmake -S . -B build -A x64 "-DDCS_ILARTS_VERSION=$env:VERSION"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --config Release --target ILARTS lso_viewer ilarts_cam
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Collect binaries
+        if: env.SIGN == 'true'
+        run: |
+          New-Item -ItemType Directory -Force bin-unsigned | Out-Null
+          Copy-Item build\Release\ILARTS.exe, build\Release\ILARTS.dll, build\Release\ILARTSCam.dll bin-unsigned
+
+      - name: Upload binaries for signing
+        id: up-bin
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-unsigned
+          path: bin-unsigned/
+
+      - name: Sign binaries
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: binaries
+          github-artifact-id: ${{ steps.up-bin.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: bin-signed
+
+      - name: Use signed binaries
+        if: env.SIGN == 'true'
+        run: Copy-Item bin-signed\* build\Release -Force
+
+      - name: Inno Setup
+        run: |
+          $have = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ }
+          if (-not $have) { choco install innosetup -y --no-progress; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+
+      - name: Package
+        run: |
+          .\deploy\package.ps1 -Version $env:VERSION
+          if (-not $?) { exit 1 }
+
+      - name: Upload installer for signing
+        id: up-setup
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned
+          path: dist/DCS-ILARTS-Setup-${{ env.VERSION }}.exe
+
+      - name: Sign installer
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.up-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: setup-signed
+
+      - name: Use signed installer
+        if: env.SIGN == 'true'
+        run: Copy-Item setup-signed\*.exe dist -Force
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: DCS-ILARTS-${{ env.VERSION }}
+          path: |
+            dist/DCS-ILARTS-Setup-${{ env.VERSION }}.exe
+            dist/DCS-ILARTS_v${{ env.VERSION }}.zip
+            dist/ovgme/DCS-ILARTS.zip
