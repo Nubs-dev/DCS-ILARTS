@@ -76,6 +76,7 @@ All fields are optional. Missing objects show as empty or off.
 | `nativeLook` | bool | `true`: the host renders the adjustments and the CCTV look itself, so there are no CSS stand-ins. |
 | `settings` | bool | `false` makes SETTINGS FILE unavailable. |
 | `guide` | bool | `false` hides the title bar's ? key (the user guide). |
+| `update` | object or `null` | The title bar's update indicator (a download icon and `label`), shown only with an update: `label` (`'1.1.0 AVAILABLE'`, `'1.1.0 · 37%'`, `'UPDATE FAILED'`), `tone` (`'green'`, `'amber'`), `tip`, `version`, and `menu`: `[{id, label, on}]`, the items its click offers (`on` false: shown greyed). |
 | `bench` | object or `null` | The title bar's benchmark lamp, shown only with a state: `state` (`'armed'`, `'running'`, `'complete'`, `'error'`) and `tip` (its tooltip). |
 | `knobs` | `{exp, bri, con, gam}` | Each `{min, max, step, log}` overrides a knob's range. `log: true` gives a logarithmic sweep. The defaults are those of the hand-off spec. |
 | `layout` | string | The monitor wall: `'1'` (monitor A), `'2'` (A and B, each with its own channel strip) or `'q'` (A and four previews). Default `'q'`. |
@@ -126,6 +127,7 @@ The `command` event's `detail` is one of these:
 | `{cmd:'bb'}`, `'bbSave'`, `{cmd:'stream', on}`, `{cmd:'stream', n, on}` | Black box and stream rockers (every stream with a server), one stream (n 0-3), and SAVE. |
 | `{cmd:'settings'}`, `'settingsClose'`, `{cmd:'settingsSave', values}`, `{cmd:'settingsAction', id, key}` | The settings dialog. `values` maps each field key to its value. `id` is `browse` (with `key`), `openFile`, `export`, `import` or `restart`. |
 | `{cmd:'win', what}`, `{cmd:'drag'}` | Title bar: `what` is `min`, `max` or `close`. |
+| `{cmd:'update', what}` | Title bar: an item of the update indicator's menu (`what` = its `id`: `'install'`, `'notes'`, `'skip'`, `'cancel'`). |
 | `{cmd:'guide'}`, `{cmd:'benchLamp'}` | Title bar: the ? key; the benchmark lamp clicked after a run (complete or error). Armed or running, the lamp opens the settings dialog at the Benchmark panel instead (`{cmd:'settings'}`). |
 | `{cmd:'layout', rects, dpr}` | `native-video` only: the screens' rectangles (`[x, y, w, h]` in CSS pixels of the viewport), plus `titlebar` and `winbtns`. |
 

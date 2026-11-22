@@ -5,6 +5,8 @@
 #include "compat.h"
 #include "engine.h"
 #include "extra_cams.h"
+#include "night_sky.h"
+#include "origin_split.h"
 #include "own_canopy.h"
 #include "plat_cam.h"
 #include "share.h"
@@ -50,11 +52,14 @@ constexpr size_t kMaxEntries = 256;
 // Return address of the view setup call for picture sources (cockpit TV displays, PLAT, extra cameras):
 // buildRenderGraph's loop over DCSFrameDesc+0x1078 (0x330 bytes each) calls +0x14940 at +0x24FBE.
 constexpr uintptr_t kExtraViewSetupRet = 0x24FC3;
-// Only replace when the main camera is this far from the PLAT. NOT a precision threshold: while the main
-// view also draws the carrier, the PLAT's carrier (LOD 0, placed relative to the PLAT origin) shows up
-// in the main view next to the player's camera, flickering (run 2026-11-10 02:5x, player 2-13 km away).
-// The carrier's last LOD ends at 50 km (Nimitz_CVN_7x.lods); 70 km also clears the 65.5 km float step
-// boundary, so below it the stock placement steps are at most 3.9 mm.
+// Only replace when the main camera is this far from the PLAT; below it the stock placement steps are at most
+// 3.9 mm (70 km clears the 65.5 km float step boundary). It was raised from 500 m after the "ghost carrier"
+// (run 2026-11-10 02:5x, player 2-13 km away: the PLAT's LOD 0 carrier flickering next to the player's camera),
+// on the reading that the main view stops drawing the carrier at its last LOD (50 km). That reading was wrong:
+// DCS places an object once per call for every view that sees it, relative to the first view's origin, so the
+// main view picks the LOD from the displaced position (LOD 0) and draws it whenever the scene hands it the
+// object - up to the camera's object range, graphics.lua Camera.objects = 80 km. The run of 2026-11-19 showed it
+// at 68-74 km. origin_split.cpp now splits such calls per origin; the threshold stays for precision reasons.
 constexpr double kFarMetres = 70000.0;
 constexpr ULONGLONG kStaleMs = 2000;     // PLAT position older than this: no matching
 
@@ -256,7 +261,11 @@ void BuildWrap(void* self, const void* desc) {
     g_swappedN = 0;
     ReleaseSRWLockExclusive(&g_swapLock);
     g_buildFn(self, desc);
+    // Before the scene collects this frame's objects: whether the views at the carrier have their own origin.
+    OriginSplitFrame(g_viewSwapped, g_subst, g_platSeen ? g_lastDist : -1.0);
     OwnCanopyBuildEnd(self ? static_cast<const char*>(self) + kGraphOffset : nullptr);
+    if (g_viewSwapped) NightSkyNoteOrigin(g_subst);   // the far views' cloud lookup (rain.h) finds them by it
+    NightSkyBuildEnd();
     if (!self) return;
     if (g_swappedN > g_swapPeak) g_swapPeak = g_swappedN;
     static ULONGLONG s_swapLogTick = 0;
@@ -265,8 +274,10 @@ void BuildWrap(void* self, const void* desc) {
         s_swapLogTick = GetTickCount64();
         g_loggedSwapN = g_swappedN;
         if (g_swappedN)
-            Log("PLATORIGIN %d view(s) at the carrier share the origin (%.0f, %.0f, %.0f); frame origin (%.0f, %.0f, %.0f)", g_swappedN,
-                g_substD[0], g_substD[1], g_substD[2], g_frameOrigin[0], g_frameOrigin[1], g_frameOrigin[2]);
+            Log("PLATORIGIN %d view(s) at the carrier share the origin (%.0f, %.0f, %.0f); frame origin (%.0f, %.0f, %.0f); "
+                "main camera to PLAT %.1f km",
+                g_swappedN, g_substD[0], g_substD[1], g_substD[2], g_frameOrigin[0], g_frameOrigin[1], g_frameOrigin[2],
+                g_lastDist / 1000.0);
         else
             Log("PLATORIGIN no view on the carrier's own origin (main camera within %.0f km, or no PLAT)", kFarMetres / 1000.0);
     }
@@ -307,9 +318,11 @@ uint64_t Wrap(void* view, const void* cam, const double* origin, void* a4, uint6
     InterlockedIncrement64(&g_calls);
     if (cam && g_srBase && reinterpret_cast<uintptr_t>(_ReturnAddress()) - g_srBase == kExtraViewSetupRet) {
         // A picture source's view (cockpit TV displays, the PLAT, the extra cameras). The PLAT's and the extra
-        // cameras' are ILARTS's views: own_canopy.h draws your aircraft there as seen from outside.
+        // cameras' are ILARTS's views: own_canopy.h draws your aircraft there as seen from outside, night_sky.h
+        // takes the stars out of them.
         auto c = reinterpret_cast<const double*>(static_cast<const char*>(cam) + kCamPosOffset);
-        bool ours = ExtraCamsNear(c, kExtraCamMetres);
+        const bool extraCam = ExtraCamsNear(c, kExtraCamMetres);
+        bool ours = extraCam;
         double synth[16];
         if (!ours && PlatCamPose(synth)) {
             // the synthetic PLAT camera's pose of this frame (the hook's PLAT position is refreshed once a second)
@@ -321,7 +334,10 @@ uint64_t Wrap(void* view, const void* cam, const double* origin, void* a4, uint6
                          dz = c[2] - g_pz.load(std::memory_order_relaxed);
             ours = dx * dx + dy * dy + dz * dz < kMatchMetres * kMatchMetres;
         }
-        if (ours) OwnCanopyNoteView(c);
+        if (ours) {
+            OwnCanopyNoteView(c);
+            NightSkyNoteView(c, !extraCam);   // not an extra camera: the PLAT
+        }
     }
     if (cam && origin && GetTickCount64() - g_pTick.load(std::memory_order_relaxed) < kStaleMs) {
         auto c = reinterpret_cast<const double*>(static_cast<const char*>(cam) + kCamPosOffset);
@@ -621,6 +637,9 @@ std::string PlatOriginInstall() {
     } else {
         Log("PLATORIGIN installed: frame origin at SceneRenderer+0x1F881 (buildRenderGraph) and +0x2474A (aux "
             "buffers only), Visualizer's buildRenderGraph import -> wrapper (collection patch)");
+        // Objects seen by both the views at the carrier and DCS's views are placed per origin (origin_split.h).
+        const std::string split = OriginSplitInstall();
+        if (!split.empty()) Log("PLATORIGIN object split NOT installed: %s", split.c_str());
     }
     return "";
 }
@@ -628,6 +647,7 @@ std::string PlatOriginInstall() {
 void PlatOriginRemove() {
     if (!g_installed) return;
     g_mode = 0;
+    OriginSplitRemove();
     if (g_buildSlot) {
         WriteSlot(g_buildSlot, reinterpret_cast<void*>(g_buildFn));
         g_buildSlot = nullptr;
@@ -687,7 +707,7 @@ std::string PlatOriginStats() {
             out += b;
         }
     }
-    return out;
+    return out + " || " + OriginSplitStats();
 }
 
 }  // namespace lsodiag

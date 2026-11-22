@@ -28,13 +28,17 @@ std::string LsoSmoothStats();
 
 // Keep the PLAT view rendering away from the LSO station: makes the view system keep returning the
 // last LSO camera when DCS's own lookup returns null (private-vtable swap on the globalView object).
+// Only Visualizer's two PLAT sites get that kept camera; every other caller of slot 31 (Supercarrier,
+// DCS.exe, aircraft modules) always gets DCS's own answer (2026-11-19 audit).
 // Start returns "" on success, otherwise why it refused. Stop restores DCS's vtable pointer.
+// With verbose logging on at Start, the call counting (VIEWCALLS) and the slot 12/13 answer hooks are added
+// as well; without it the private table differs from DCS's in slot 31 only.
 std::string LsoKeepPlatStart();
 std::string LsoKeepPlatStop();
 // Per-slot globalView call counts since the previous call (all callers, and edSupercarrier.dll callers).
 std::string LsoViewCallStats();
 // While the PLAT camera is substituted, give Supercarrier (only) the globalView slot 12/13 answers it got
-// at the LSO station, so it keeps driving the PLAT symbology.
+// at the LSO station, so it keeps driving the PLAT symbology. Adds the slot 12/13 hooks if they are not there.
 void LsoSupercarrierOverride(bool on);
 
 }  // namespace lsodiag

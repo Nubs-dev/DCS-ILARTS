@@ -82,6 +82,13 @@ open it yourself).
 
 **After a DCS update:** run **REPAIR** (SETTINGS > Installation, or Start menu > *DCS ILARTS - Repair*).
 
+**Updates:** once a day ILARTS asks GitHub whether there is a newer release. When there is, a download icon and **1.1.0 AVAILABLE**
+(the new version) appear in the title bar; click it for **INSTALL**, **RELEASE NOTES** or **SKIP THIS VERSION**. INSTALL
+downloads the setup program, checks that it is the one published with the release, closes ILARTS, runs the setup with
+your earlier choices and starts ILARTS again. Close DCS first: DCS holds ILARTS's files while it runs. Installed with
+OMM or OvGME, the menu offers **RELEASE PAGE** instead: download the new zip there. To turn it off: SETTINGS >
+Installation > *Check for updates*, or untick *Check for updates* in the setup program.
+
 **Uninstall:** the setup program's uninstaller removes everything, including the `autoexec.cfg` permissions. With OMM
 or OvGME, first click SETTINGS > Installation > DCS permissions > **REMOVE** (and Outputs > Camera component >
 **REMOVE** if you installed the webcams), then disable the mod.
@@ -156,7 +163,8 @@ To keep DCS fast:
 ## Documentation
 
 - [User guide (PDF)](docs/DCS-ILARTS-Guide.pdf): the console, the controls and every setting. The **?** key in
-  ILARTS's title bar opens it.
+  ILARTS's title bar opens it. The same guide as a web page: `DCS-ILARTS-Guide.html`, next to the PDF in the mod
+  folder and on each release.
 - [`deploy/README.txt`](deploy/README.txt): the full reference that ships with the mod (keys, recording names,
   `ILARTS.ini`).
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): build, internals and tests.
@@ -171,8 +179,10 @@ DCS ILARTS is free. If you want to say thank you for it, please consider a donat
 ## Privacy
 
 DCS ILARTS collects no data: no telemetry, no account. Everything it makes (recordings, stills, settings, the log)
-stays on your PC. The only network connection it makes is an RTMP stream you set up yourself, to the server you
-enter. Future versions may include an optional automatic check for updates. The log
+stays on your PC. It connects to the network for two things only: an RTMP stream you set up yourself, to the server
+you enter, and the check for updates (unless you switch it off): once a day it asks GitHub's public API for the newest
+release of DCS ILARTS, sending nothing about you or your PC (a generic `ILARTS-updater/<version>` user agent, no
+account), and downloads the setup program from GitHub when you click INSTALL. The log
 (`%LOCALAPPDATA%\ILARTS\ILARTS.log`) can show your Windows user name in file paths; it only leaves your PC if you
 attach it to a bug report. The window is drawn by Microsoft's WebView2 runtime, which follows your Windows
 diagnostic data settings.
@@ -191,6 +201,24 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 DCS ILARTS was built with the help of AI tools (Claude, by Anthropic). The author designed it, directed the
 work and tested it in DCS.
+
+## Limitations and known issues
+
+Some parts of the picture DCS works out only for the **main viewport** (the view on your screen) at **your player
+location** (where you are in DCS: in an aircraft, at the LSO or Air Boss station, and so on). The PLAT and ILARTS's
+cameras are separate views and don't get them. So:
+
+- **No sun shadows** in the PLAT or the cameras, even with you at the LSO station (the island's shadow on the deck, for
+  example). DCS draws sun shadows for the main viewport only; DCS's own PLAT has none either.
+- **The deck's light:** DCS works out reflections and sky light at your player location and uses them for every view,
+  so when you are far from the carrier the deck in the PLAT and the cameras can look darker or flatter than when you are
+  near it, most visibly in overcast and rain.
+- **Weather beyond 200 km:** DCS keeps cloud data only for 200 km around your player location, so with the carrier farther
+  away the PLAT and the cameras can show different clouds and rain than the carrier really has.
+- **Rain:** in a warm mission the cameras' rain is lighter while your player location is at about 2.5-3.5 km (DCS turns part
+  of it into snow for every view when it is near freezing there); under time acceleration the streaks are longer.
+- **Multiplayer clients** get no LSO grades in file names and no automatic black box save after a crash or ejection
+  (DCS sends those events to the host only).
 
 ## Problems
 

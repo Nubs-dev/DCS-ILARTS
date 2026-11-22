@@ -83,6 +83,7 @@ struct Aim {
 volatile double g_worldPos[kExtraCams][3] = {};
 volatile ULONGLONG g_worldTick[kExtraCams] = {};
 volatile LONG g_slotOf[kExtraCams] = {-1, -1, -1, -1, -1, -1};
+volatile LONG g_hangar[kExtraCams] = {};   // the camera shows a hangar deck position
 
 double Seconds() {
     static const double inv = [] {
@@ -110,6 +111,34 @@ DtorFn g_dtor = nullptr;
 volatile long long g_frames = 0, g_injected[kExtraCams] = {}, g_noPlat = 0, g_noShip = 0, g_busy = 0, g_invalid = 0, g_locked = 0;
 volatile LONG g_faulted = 0;
 bool g_loggedFirst[kExtraCams] = {};
+
+// The cockpit picture sources (0-31) DCS itself filled, taken each frame in BuilderWrap after DCS's own
+// builders ran and before the cameras add theirs (view setup thread): the last time each one was the
+// cockpit's, and the last snapshot. Read by the viewport resize (mfd.cpp, render thread) so that a source the
+// cockpit uses is never resized by ILARTS. 10 s of memory: the cockpit's sources are all invalid on the F10
+// map (no cockpit views), and a TV page may come and go.
+constexpr ULONGLONG kCockpitMemoryMs = 10000;
+volatile ULONGLONG g_cockpitSeen[32] = {};
+volatile ULONGLONG g_cockpitTick = 0;
+
+unsigned CockpitSources() {
+    const unsigned char* slots = *reinterpret_cast<unsigned char* const*>(g_vis + kSlotsRva);
+    const size_t count = *reinterpret_cast<const size_t*>(g_vis + kSlotCountRva);
+    if (!slots || count < kSlotCount) return 0;
+    unsigned m = 0;
+    for (unsigned i = 0; i < 32; ++i)
+        if (slots[i * kDescSize + kOffValid]) m |= 1u << i;
+    return m;
+}
+
+bool SehCockpitSources(unsigned* out) {
+    __try {
+        *out = CockpitSources();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
 // The picture source's overlay callback: draws nothing. (DCS calls the PLAT's with no arguments it uses and
 // the cockpit ones with (index, pointer); both are fine with this.)
@@ -305,6 +334,13 @@ bool SehInject(const void* platDesc, unsigned mask) {
 // Replaces DCS's call of the PLAT picture source builder.
 void* BuilderWrap(void* out, unsigned index, const int* viewportId) {
     void* r = g_builder(out, index, viewportId);
+    unsigned cockpit = 0;
+    if (SehCockpitSources(&cockpit)) {
+        const ULONGLONG now = GetTickCount64();
+        for (int i = 0; i < 32; ++i)
+            if (cockpit & (1u << i)) g_cockpitSeen[i] = now;
+        g_cockpitTick = now;
+    }
     const unsigned mask = static_cast<unsigned>(g_mask);
     if (!mask || !r) return r;
     ++g_frames;
@@ -458,6 +494,23 @@ bool ExtraCamsNear(const double* world, double metres) {
     return false;
 }
 
+void ExtraCamsSetHangar(int index, bool hangar) {
+    if (index < 0 || index >= kExtraCams) return;
+    if (InterlockedExchange(&g_hangar[index], hangar ? 1 : 0) != (hangar ? 1 : 0))
+        Log("EXTRACAM camera %d: %s", index, hangar ? "a hangar deck position (no rain or snow)" : "not a hangar position");
+}
+
+bool ExtraCamsHangarNear(const double* world, double metres) {
+    const unsigned mask = static_cast<unsigned>(g_mask);
+    const ULONGLONG now = GetTickCount64();
+    for (int i = 0; i < kExtraCams; ++i) {
+        if (!g_hangar[i] || !(mask & (1u << i)) || now - g_worldTick[i] > 2000) continue;
+        const double dx = world[0] - g_worldPos[i][0], dy = world[1] - g_worldPos[i][1], dz = world[2] - g_worldPos[i][2];
+        if (dx * dx + dy * dy + dz * dz < metres * metres) return true;
+    }
+    return false;
+}
+
 bool ExtraCamsTargetName(const char* name) {
     if (!name || strncmp(name, "mfd", 3) != 0 || !name[3]) return false;
     char* end = nullptr;
@@ -467,6 +520,22 @@ bool ExtraCamsTargetName(const char* name) {
     for (int i = 0; i < kExtraCams; ++i)
         if ((mask & (1u << i)) && g_slotOf[i] == slot) return true;
     return false;
+}
+
+bool ExtraCamsCockpitSource(int source) {
+    if (source < 0 || source >= 32) return false;
+    const ULONGLONG now = GetTickCount64();
+    if (now - g_cockpitSeen[source] < kCockpitMemoryMs) return true;
+    if (now - g_cockpitTick < 2000) return false;
+    // The redirect is not running (no camera since the mission started): the source's valid byte is DCS's own.
+    HMODULE vis = GetModuleHandleW(L"Visualizer.dll");
+    if (!vis || !CompatOk()) return false;
+    const unsigned char* base = reinterpret_cast<const unsigned char*>(vis);
+    const unsigned char* slots = nullptr;
+    size_t count = 0;
+    unsigned char valid = 0;
+    return SafeRead(base + kSlotsRva, &slots, sizeof(slots)) && SafeRead(base + kSlotCountRva, &count, sizeof(count)) && slots &&
+           count >= kSlotCount && SafeRead(slots + static_cast<size_t>(source) * kDescSize + kOffValid, &valid, 1) && valid;
 }
 
 void ExtraCamsTrack(int index, const double* p, double modelTime) {

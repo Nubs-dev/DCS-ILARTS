@@ -39,9 +39,12 @@ struct State {
 // The globalView object's vptr is pointed at a private copy of its vtable in which slot 31 is
 // replaced. The replacement calls DCS's own function; when that returns null (player not at the
 // LSO station) it returns the LSO camera last returned this mission, provided that object still
-// carries the same vptr. DCS code and DCS's vtable are not modified; the original vptr is put back
-// by LsoKeepPlatStop(). Of the unprotected modules only Visualizer calls slot 31, at the two PLAT
-// render sites (0xBC250, 0xBCFC0).
+// carries the same vptr - to callers inside Visualizer.dll only. DCS code and DCS's vtable are not
+// modified; the original vptr is put back by LsoKeepPlatStop(). Of the unprotected modules only
+// Visualizer calls slot 31, at the two PLAT render sites (0xBC250, 0xBCFC0); protected ones
+// (Supercarrier +0x370C7, possibly DCS.exe or aircraft modules) always get DCS's own answer.
+// Every other slot is DCS's own function unless verbose logging was on at the start (call counting,
+// slots 12 / 13) or the Supercarrier override was asked for (slots 12 / 13).
 constexpr size_t kVtblCopySlots = 512;  // generous: entries past the real end are never called
 
 struct Keep {
@@ -56,6 +59,7 @@ struct Keep {
 } g_keep;
 
 uintptr_t g_viewSetupRet = 0;          // Visualizer+0xBD015: return address of the PLAT view setup call
+uintptr_t g_visLo = 0, g_visHi = 0;    // Visualizer.dll: the only callers that get the kept camera
 volatile ULONGLONG g_stationTick = 0;  // last time DCS itself returned an LSO camera
 bool AtStation() { return GetTickCount64() - g_stationTick < 500; }
 
@@ -197,6 +201,11 @@ void* HookGetLsoCamera(void* self) {
     InterlockedIncrement64(&g_keep.dcsNull);
     void* c = g_keep.cached;
     if (!g_keep.enabled || !c) return nullptr;
+    // The kept camera is a DCS object DCS itself no longer hands out here; give it only to Visualizer's PLAT
+    // sites (view setup, overlay callback), whose use of it is known. Protected callers - Supercarrier,
+    // DCS.exe, aircraft modules - get DCS's own null.
+    const uintptr_t r = reinterpret_cast<uintptr_t>(ra);
+    if (r < g_visLo || r >= g_visHi) return nullptr;
     const void* v = nullptr;
     if (!SafeReadPtr(c, &v) || v != g_keep.cachedVtbl) {  // object gone or reused: stop substituting
         g_keep.cached = nullptr;
@@ -254,6 +263,29 @@ uintptr_t AnswerHook(void* self, uintptr_t a1, uintptr_t a2, uintptr_t a3) {
         }
     }
     return v;
+}
+
+// Puts the slot 12 / 13 hooks into the private table (the table may already be the object's vtable: one
+// aligned pointer store per slot, readers see DCS's function or the hook). Only for entries that are DCS.exe
+// code; "" or why not.
+bool g_ansInstalled = false;
+std::string InstallAnswerHooks() {
+    if (g_ansInstalled) return "";
+    const void* hooks[2] = {reinterpret_cast<const void*>(&AnswerHook<0>), reinterpret_cast<const void*>(&AnswerHook<1>)};
+    const void* orig[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        orig[i] = g_keep.table[1 + kAnswerSlots[i]];
+        if (DescribeAddress(orig[i]).rfind("DCS.exe+", 0) != 0) return "slot " + std::to_string(kAnswerSlots[i]) + " not in DCS.exe";
+    }
+    for (int i = 0; i < 2; ++i) {
+        g_ans[i] = Answer{};
+        g_ans[i].orig = reinterpret_cast<Slot4Fn>(const_cast<void*>(orig[i]));
+    }
+    for (int i = 0; i < 2; ++i)
+        InterlockedExchangePointer(reinterpret_cast<void* volatile*>(const_cast<void**>(&g_keep.table[1 + kAnswerSlots[i]])),
+                                   const_cast<void*>(hooks[i]));
+    g_ansInstalled = true;
+    return "";
 }
 
 // ---- call accounting on the private vtable (observation only) ----
@@ -713,30 +745,31 @@ std::string LsoKeepPlatStart() {
     if (DescribeAddress(orig).rfind("DCS.exe+", 0) != 0) return "slot 31 not in DCS.exe";
     g_keep.origSlot31 = reinterpret_cast<GetCamFn>(const_cast<void*>(orig));
     g_keep.table[1 + kSlotGetLsoCamera] = reinterpret_cast<const void*>(&HookGetLsoCamera);
-    // Supercarrier view-state answers (see AnswerHook); only for entries that are DCS.exe code
-    {
-        const void* hooks[2] = {reinterpret_cast<const void*>(&AnswerHook<0>), reinterpret_cast<const void*>(&AnswerHook<1>)};
-        for (int i = 0; i < 2; ++i) {
-            const void* t = g_keep.table[1 + kAnswerSlots[i]];
-            if (DescribeAddress(t).rfind("DCS.exe+", 0) != 0) return "slot " + std::to_string(kAnswerSlots[i]) + " not in DCS.exe";
-            g_ans[i] = Answer{};
-            g_ans[i].orig = reinterpret_cast<Slot4Fn>(const_cast<void*>(t));
-        }
-        for (int i = 0; i < 2; ++i) g_keep.table[1 + kAnswerSlots[i]] = hooks[i];
+    // Observation only, so only with verbose logging: the Supercarrier view-state answers (see AnswerHook) and
+    // the call counting through generated thunks (VIEWCALLS). Without them every other slot is DCS's own.
+    g_ansInstalled = false;
+    if (Verbose()) {
+        const std::string ansWhy = InstallAnswerHooks();
+        if (!ansWhy.empty()) return ansWhy;
+        InstrumentTable();
     }
-    InstrumentTable();
     g_keep.origVtbl = vtbl;
     g_keep.cached = nullptr;
     g_keep.cachedVtbl = nullptr;
     g_keep.dcsNull = g_keep.substituted = g_keep.passed = 0;
     g_keep.view = view;
     g_keep.enabled = 1;
-    if (HMODULE vis = GetModuleHandleW(L"Visualizer.dll"); vis && CompatOk())
+    if (HMODULE vis = GetModuleHandleW(L"Visualizer.dll"); vis && CompatOk()) {
         g_viewSetupRet = reinterpret_cast<uintptr_t>(vis) + kPlatSetupRetRva;
+        if (!ModuleRange(L"Visualizer.dll", &g_visLo, &g_visHi)) g_visLo = g_visHi = 0;
+    } else {
+        g_visLo = g_visHi = 0;  // nobody gets the kept camera
+    }
     // single aligned pointer store; readers see either the old or the new table, both valid
     InterlockedExchangePointer(reinterpret_cast<void* volatile*>(view), const_cast<void**>(&g_keep.table[1]));
-    Log("KEEPPLAT installed: globalView %p vptr %s -> private copy %p (slot31 %s -> hook)", view,
-        DescribeAddress(vtbl).c_str(), &g_keep.table[1], DescribeAddress(orig).c_str());
+    Log("KEEPPLAT installed: globalView %p vptr %s -> private copy %p (slot31 %s -> hook, kept camera to Visualizer only%s)", view,
+        DescribeAddress(vtbl).c_str(), &g_keep.table[1], DescribeAddress(orig).c_str(),
+        g_ansInstalled ? "; slots 12/13 hooked, calls counted (verbose)" : "");
     return "";
 }
 
@@ -811,8 +844,11 @@ std::string LsoViewCallStats() {
 }
 
 void LsoSupercarrierOverride(bool on) {
+    std::string why;
+    if (on && g_keep.view && !g_ansInstalled) why = InstallAnswerHooks();  // the slot 12/13 hooks, on first use
     InterlockedExchange(&g_scOverride, on ? 1 : 0);
-    Log("SCVIEW Supercarrier view-state override %s", on ? "ON" : "OFF");
+    Log("SCVIEW Supercarrier view-state override %s%s%s", on ? "ON" : "OFF", why.empty() ? "" : ": hooks not installed, ",
+        why.c_str());
 }
 
 std::string LsoKeepPlatStop() {
@@ -833,6 +869,7 @@ std::string LsoKeepPlatStop() {
     Log("KEEPPLAT %s", line);
     g_keep.cached = nullptr;
     g_keep.view = nullptr;  // table and hook stay in memory (DLL is pinned) in case a call is in flight
+    g_ansInstalled = false; // the next start builds a fresh table
     return line;
 }
 

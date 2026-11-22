@@ -45,8 +45,9 @@ foreach ($f in @('index.html', 'ilarts-console.js', 'fonts\fonts.css', 'fonts\sa
 # Licence notices of what is linked in: Microsoft's WebView2 loader, the Spout2 SDK.
 $files["$bin\LICENSE-WebView2.txt"] = Join-Path $root 'third_party\webview2\LICENSE.txt'
 $files["$bin\LICENSE-Spout2.txt"] = Join-Path $root 'third_party\spout\LICENSE.txt'
-# The user guide (docs\guide\build-guide.ps1 makes it).
+# The user guide, as a PDF and as one self-contained web page (docs\guide\build-guide.ps1 makes both).
 $files['Mods\tech\ILARTS\DCS-ILARTS-Guide.pdf'] = Join-Path $root 'docs\DCS-ILARTS-Guide.pdf'
+$files['Mods\tech\ILARTS\DCS-ILARTS-Guide.html'] = Join-Path $root 'docs\DCS-ILARTS-Guide.html'
 # The benchmark mission (SETTINGS > Benchmark): into Saved Games\DCS\Missions.
 $files['Missions\ILARTS Benchmark.miz'] = Join-Path $PSScriptRoot 'Missions\ILARTS Benchmark.miz'
 foreach ($src in $files.Values) { if (-not (Test-Path -LiteralPath $src)) { throw "missing: $src (build Release first)" } }

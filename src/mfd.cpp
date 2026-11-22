@@ -3,6 +3,7 @@
 #include "common.h"
 #include "compat.h"
 #include "engine.h"
+#include "extra_cams.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -22,10 +23,10 @@ using ResizeFn = void (*)(void* self, unsigned int index, uint64_t packedVec2i);
 SRWLOCK g_lock = SRWLOCK_INIT;
 struct Request {
     int index = -1, w = 0, h = 0;
-    bool loggedApplied = false, loggedWaiting = false;
+    bool loggedApplied = false, loggedWaiting = false, loggedCockpit = false;
     ULONGLONG nextCheck = 0;
 };
-Request g_reqs[4];  // the PLAT's viewport and the extra cameras' viewports
+Request g_reqs[8];  // the PLAT's viewport and the extra cameras' viewports (up to 6)
 
 struct SceneRenderer {
     void* self = nullptr;
@@ -101,6 +102,8 @@ bool SehEnforce(EnforceFn fn, void* self, int index, int w, int h, DWORD* code) 
 std::string MfdEnforceResolution(int index, int w, int h) {
     if (index < 0 || index >= kMaxViewports || w <= 0 || h <= 0 || w > 4096 || h > 4096) return "argument out of range";
     if (EngineDisabled()) return "engine calls disabled after an earlier exception";
+    // A cockpit picture source the cockpit itself uses keeps the cockpit's size (the cameras skip it too).
+    if (ExtraCamsCockpitSource(index)) return "picture source " + std::to_string(index) + " is in use by the cockpit";
     HMODULE inter = GetModuleHandleW(L"Inter.dll");
     HMODULE vis = GetModuleHandleW(L"Visualizer.dll");
     if (!inter || !vis) return "Inter/Visualizer not loaded";
@@ -178,6 +181,17 @@ std::string MfdRequestResolution(int index, int w, int h) {
     return {};
 }
 
+void MfdClearRequests() {
+    int n = 0;
+    AcquireSRWLockExclusive(&g_lock);
+    for (Request& r : g_reqs) {
+        if (r.index >= 0) ++n;
+        r = Request{};
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+    if (n) Log("MFD %d viewport size request(s) cleared", n);
+}
+
 void MfdOnRenderThread() {
     if (!TryAcquireSRWLockExclusive(&g_lock)) return;
     const ULONGLONG now = GetTickCount64();
@@ -192,6 +206,10 @@ void MfdOnRenderThread() {
         } else if (req.index >= s.count) {
             if (!req.loggedWaiting) Log("MFD resize waiting: viewport %d does not exist yet (%d viewports)", req.index, s.count);
             req.loggedWaiting = true;
+        } else if (ExtraCamsCockpitSource(req.index)) {
+            // the cockpit renders into this one (a TV display): never fight it over the size
+            if (!req.loggedCockpit) Log("MFD viewport %d is in use by the cockpit: its size is left alone", req.index);
+            req.loggedCockpit = true;
         } else {
             int cw = 0, ch = 0;
             ReadSize(s, req.index, cw, ch);

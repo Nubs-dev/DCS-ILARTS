@@ -24,17 +24,17 @@ constexpr uintptr_t kFetchCallRva = 0x3DBE4; // call +0x37650 (per-LOD instance 
 constexpr uintptr_t kFetchRva = 0x37650;     // (cookie slots, slot index, const args vector*, LOD root node, flag)
 constexpr unsigned char kParseHead[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
 constexpr unsigned char kFetchHead[] = {0x40, 0x56, 0x41, 0x54, 0x41, 0x55, 0x48, 0x83, 0xEC, 0x40};
-// The model's LOD table (constructor +0x3BA10): 16 entries of 0x50 bytes at +0xA0, filled from entry 0 upward;
-// +0x5A0 (qword) = number of entries loaded, +0x5B0 (dword) = first entry drawn (0, or 1 when entry 0 is a
-// negative-distance entry, +0x427B1). ParseMT2 fetches entry i's instance from slot i - first, so a model with
-// count entries uses slots 0 .. count - first - 1. (Until 2026-11-19 16:00 this read +0x5B0 as "16 - LODs":
-// with first = 0 every model looked like 16 LODs and the split never ran.)
+// The model's LOD table (constructor +0x3BA10): 16 entries of 0x50 bytes at +0xA0, filled from entry 0 upward
+// and sorted by distance; +0x5A0 (qword) = number of entries loaded, +0x5B0 (dword) = first entry drawn (0, or 1
+// when entry 0 has a negative distance, +0x427B1: the .lods file's collision_shell, loaded at -1e6). ParseMT2
+// fetches entry i's instance from slot i - first, so a model with count entries uses slots 0 .. count - first - 1.
+// (F/A-18C: 6 LOD files plus the collision shell = 7 entries from 1, slots 0..5.)
 constexpr size_t kLodCountOffset = 0x5A0;
 constexpr size_t kFirstLodOffset = 0x5B0;
 constexpr int kLodSlots = 16;                // per-LOD instance slots in the cookie (0xF18 bytes each)
 constexpr size_t kCookieSlots = 0x18;        // ... starting at cookie + 0x18 (the fetch's first argument)
 constexpr size_t kSlotSize = 0xF18;          // slot: +0x00 LOD root it is bound to (set on first fetch), +0x08/+0x10
-constexpr size_t kSlotArgs = 0x08;           //   its copy of the arguments (begin, end)
+constexpr size_t kSlotArgs = 0x08;           //   its own copy of the arguments (begin, end)
 constexpr size_t kCollCamera = 0x318;        // CollectionInfo: SceneRenderContext at +0x10, its camera Vec3d at +0x308
 constexpr size_t kCollMainCam = 0x4E8;       // CollectionInfo: main camera Vec3d (context +0x4D8)
 constexpr size_t kGraphCollBegin = 0x408, kGraphCollStride = 0x6D8;  // render graph's CollectionInfo array
@@ -49,13 +49,20 @@ constexpr size_t kMaxArgs = 2048;            // arguments copied for ILARTS's pa
 constexpr double kSameCameraM2 = 0.05 * 0.05;
 constexpr float kNearMainM = 15.0f;          // an object this close to your camera: your own aircraft (log)
 constexpr int kMaxNearLogs = 6;              // distinct objects near your camera logged with their arguments
-constexpr ULONGLONG kStatsMs = 15000;        // OWNCANOPY stats line interval
+// Stats: a line every 15 s for the first 60 (15 minutes), then a summary every 5 minutes for the rest of the
+// session (counters accumulate between lines, so nothing is lost after the first 15 minutes).
+constexpr ULONGLONG kStatsMs = 15000;
 constexpr int kMaxStatsLines = 60;
+constexpr ULONGLONG kSummaryMs = 300000;
+constexpr int kMaxSummaryLines = 288;        // 24 hours
 constexpr int kOwnCookies = 4;               // graphics instances seen with argument 114 set ...
-constexpr ULONGLONG kOwnCookieMs = 2000;     // ... within this long
-constexpr long kSamplesPerWindow = 8;        // OWNCANOPY near lines per stats window ...
+constexpr ULONGLONG kOwnCookieMs = 2000;     // ... within this long (diagnostics only, nothing is split for them)
+constexpr long kSamplesPerWindow = 8;        // OWNCANOPY near lines per 15 s window ...
 constexpr int kSampleWindows = 30;           // ... for this many windows
+constexpr long kSamplesPerSummary = 2;       // then per summary line, for your aircraft only
 constexpr int kMaxRefusalLogs = 6;
+constexpr int kMaxAnomalyLogs = 8;           // per kind of anomaly
+constexpr int kMaxTargetLogs = 16;           // split target changes (respawn, another object with 114 set)
 
 using ParseFn = void (*)(void* self, void* inst, unsigned n, const void* const* infos, const bool* flags, void** outs,
                          void* sampler, const void* pos);
@@ -84,7 +91,6 @@ unsigned char* g_stub = nullptr;
 
 SRWLOCK g_viewLock = SRWLOCK_INIT;
 Views g_pending, g_active;
-bool g_loggedViews = false;
 volatile long g_loggedFirst = 0;
 // This build's render graph CollectionInfo array (for the collection numbers in the near lines).
 volatile uintptr_t g_collBegin = 0, g_collEnd = 0;
@@ -99,12 +105,16 @@ thread_local float t_buf[kMaxArgs];
 thread_local void* t_diagSlots = nullptr;
 thread_local unsigned t_diagMask = 0;
 
-volatile long long g_ownViews = 0;    // parses of your aircraft (114 set, or its graphics instance) that ILARTS views see
+volatile long long g_ownViews = 0;    // parses of your aircraft (114 set) that ILARTS views see
 volatile long long g_split = 0;       // ... of those, also seen by DCS's own views (two parses)
 volatile long long g_remaps = 0;      // per-LOD instances taken from the spare slots
 volatile long long g_noSpare = 0;     // skipped: no spare slots (LOD table unreadable or more than 8 LODs)
 volatile long long g_conflicts = 0;   // spare slot bound to another LOD root: that fetch not redirected
+volatile long long g_notRedirected = 0;  // ILARTS's parse fetched a slot at or beyond the LOD count: left to DCS
 volatile long long g_faults = 0;
+// Fetch probe (every per-LOD fetch of every NGModel object, DCS's own included): never expected.
+volatile long long g_dcsRange = 0;    // slot index outside 0..15 (DCS would address memory outside the cookie)
+volatile long long g_dcsOtherRoot = 0;  // DCS's slot bound to another LOD root than the one it is fetched for
 
 // Diagnostics (always on; ILARTS.log): counters per stats line, kept in per-thread-hashed shards so the
 // render workers do not all hit one cache line.
@@ -121,8 +131,8 @@ enum Ctr {
     kNearMain,        // object within kNearMainM of your camera (your aircraft and what it carries)
     kNearMainOurs,    // ... with an ILARTS collection in the call
     kNearMain114,     // ... with 114 >= 0.5
-    kOwnCookie0,      // 114 < 0.5 but the graphics instance (cookie) is one seen with 114 set
-    kOwnCookie0Ours,  // ... with an ILARTS collection in the call
+    kShared,          // 114 < 0.5, another instance, graphics instance (cookie) seen with 114 set within 2 s
+    kFetches,         // per-LOD fetches seen
     kCtrs
 };
 struct Shard {
@@ -141,6 +151,7 @@ void* g_nearLogged[kMaxNearLogs] = {};
 volatile long g_nearLogs = 0;
 volatile long g_logged114 = 0;
 volatile long g_sampleBudget = 0;     // near lines left in this stats window
+volatile long g_sampleOwnOnly = 0;    // ... and whether only your aircraft's parses (114 set) may take one
 int g_sampleWindows = 0;
 volatile long g_refusalLogs = 0;
 // Per build (render graph): how many builds, how many listed ILARTS views.
@@ -148,34 +159,58 @@ volatile long long g_builds = 0, g_buildsWithViews = 0;
 volatile long g_maxViews = 0;
 ULONGLONG g_nextStats = 0;
 int g_statsLines = 0;
+// The view line (when the number of listed views changes).
+int g_viewLinesLast = -1, g_viewLines = 0;
+ULONGLONG g_viewTick = 0;
 
-// Graphics instances (cookie slot arrays) of objects seen with argument 114 set: your aircraft. If DCS draws
-// your aircraft through two instances that share one graphics instance (one with 114 = 1, one with 0), the
-// LOD slots they share hold whichever evaluation ran last; ILARTS's views of either use the spare slots.
+// Anomaly lines: each kind has its own budget, so one kind cannot use up the others' (the stats lines keep
+// counting every occurrence).
+enum Anomaly { kAnFault, kAnConflict, kAnNotRedirected, kAnShared, kAnDcsRange, kAnDcsOtherRoot, kAnomalies };
+volatile long g_anomalyLogs[kAnomalies] = {};
+bool AnomalyLine(Anomaly a) { return InterlockedIncrement(&g_anomalyLogs[a]) <= kMaxAnomalyLogs; }
+
+// The object the split last ran for (your aircraft): a line whenever it changes.
+void* volatile g_targetInst = nullptr;
+void* volatile g_targetSlots = nullptr;
+volatile long g_targetLogs = 0;
+
+// Graphics instances (cookie slot arrays) of objects seen with argument 114 set, and by which instance:
+// DIAGNOSTICS ONLY. Until 2026-11-19 a parse of another instance using one of them was split as well (the
+// 15:25 run's theory of two instances sharing your aircraft's graphics instance). The 21:06 run refuted that
+// theory (three 'fa-18c' instances near your camera, three graphics instances), and cookies come from an
+// ed::BlockPool that hands a freed block straight to the next object, so an address remembered for 2 s can
+// belong to another object by then. Now such a parse is only counted and logged.
 struct OwnCookie {
     void* volatile slots;
+    void* volatile inst;
     volatile ULONGLONG tick;
 };
 OwnCookie g_own[kOwnCookies] = {};
 
-void RememberOwn(void* slots) {
+void RememberOwn(void* slots, void* inst) {
     const ULONGLONG now = GetTickCount64();
     int oldest = 0;
     for (int i = 0; i < kOwnCookies; ++i) {
         if (g_own[i].slots == slots) {
+            g_own[i].inst = inst;
             g_own[i].tick = now;
             return;
         }
         if (g_own[i].tick < g_own[oldest].tick) oldest = i;
     }
     g_own[oldest].tick = now;
+    g_own[oldest].inst = inst;
     g_own[oldest].slots = slots;
 }
 
-bool IsOwn(const void* slots) {
-    for (int i = 0; i < kOwnCookies; ++i)
-        if (g_own[i].slots == slots) return GetTickCount64() - g_own[i].tick < kOwnCookieMs;
-    return false;
+// The instance that used `slots` with 114 set within the last 2 s, if it was another one than `inst`.
+void* SharedWithOwn(const void* slots, const void* inst) {
+    for (int i = 0; i < kOwnCookies; ++i) {
+        if (g_own[i].slots != slots) continue;
+        void* owner = g_own[i].inst;
+        return owner != inst && GetTickCount64() - g_own[i].tick < kOwnCookieMs ? owner : nullptr;
+    }
+    return nullptr;
 }
 
 void RaiseMax(volatile long* m, long v) {
@@ -249,12 +284,14 @@ bool ReadLods(const void* model, uint64_t* count, uint32_t* first) {
     }
 }
 
-// The LOD root a slot is bound to (null while unused), or (void*)-1 on a fault.
+const void* const kFaulted = reinterpret_cast<const void*>(~uintptr_t{0});
+
+// The LOD root a slot is bound to (null while unused), or kFaulted. Only for 0 <= index < kLodSlots.
 const void* SlotRoot(const void* slots, int64_t index) {
     __try {
         return *reinterpret_cast<const void* const*>(static_cast<const unsigned char*>(slots) + index * kSlotSize);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return reinterpret_cast<const void*>(~uintptr_t{0});
+        return kFaulted;
     }
 }
 
@@ -331,7 +368,7 @@ void FormatArgs(const float* args, size_t count, char* out, size_t size) {
 }
 
 // Once per distinct object near your camera (up to kMaxNearLogs): what it is and its arguments.
-void LogNear(void* self, void* inst, float d, const float* args, size_t count, int ours, unsigned n) {
+__declspec(noinline) void LogNear(void* self, void* inst, float d, const float* args, size_t count, int ours, unsigned n) {
     for (int i = 0; i < kMaxNearLogs; ++i)
         if (g_nearLogged[i] == inst) return;
     const long slot = InterlockedIncrement(&g_nearLogs) - 1;
@@ -396,6 +433,35 @@ void LogRefusal(void* self, const char* why, uint64_t count, uint32_t first) {
         static_cast<unsigned long long>(count), first, static_cast<long long>(count) - static_cast<long long>(first));
 }
 
+void NoteFault(const char* what, void* self) {
+    InterlockedIncrement64(&g_faults);
+    if (!AnomalyLine(kAnFault)) return;
+    char name[64];
+    ReadModelName(self, name, sizeof(name));
+    Log("OWNCANOPY anomaly: fault reading %s (model '%s' %p); that parse left to DCS", what, name, self);
+}
+
+// A line whenever the object the split runs for changes: your aircraft after a respawn or slot change, or
+// (never expected) another object with argument 114 set.
+void NoteTarget(void* self, void* inst, void* slots, uint64_t count, uint32_t first, int lods) {
+    void* const prevInst = g_targetInst;
+    void* const prevSlots = g_targetSlots;
+    if (prevInst == inst && prevSlots == slots) return;
+    if (InterlockedCompareExchangePointer(&g_targetInst, inst, prevInst) != prevInst) return;   // another thread logs it
+    g_targetSlots = slots;
+    if (InterlockedIncrement(&g_targetLogs) > kMaxTargetLogs) return;
+    char name[64];
+    ReadModelName(self, name, sizeof(name));
+    if (prevInst || prevSlots)
+        Log("OWNCANOPY split target: model '%s' %p instance %p graphics %p, LOD entries %llu from %u = %d LODs (ILARTS's slots "
+            "%d..%d); before: instance %p graphics %p",
+            name, self, inst, slots, static_cast<unsigned long long>(count), first, lods, lods, 2 * lods - 1, prevInst, prevSlots);
+    else
+        Log("OWNCANOPY split target: model '%s' %p instance %p graphics %p, LOD entries %llu from %u = %d LODs (ILARTS's slots "
+            "%d..%d)",
+            name, self, inst, slots, static_cast<unsigned long long>(count), first, lods, lods, 2 * lods - 1);
+}
+
 struct ShiftScope {
     ShiftScope(int shift, void* slots, const float* args, size_t count) {
         t_vec.begin = args;
@@ -412,6 +478,100 @@ struct ShiftScope {
 
 // What the wrapper did with a call (for the near lines).
 enum class Did { Plain, NoSpare, Split, OnlyIlarts };
+
+// Your aircraft (argument 114 set: you are in its cockpit), seen by one of ILARTS's views: ILARTS's
+// collections parsed with a copy of the arguments in which 114 is 0, their per-LOD instances in the spare
+// slots. Kept out of ParseWrap so the arrays below are on the stack only for this call (once a frame).
+__declspec(noinline) Did SplitParse(void* self, void* inst, unsigned n, const void* const* infos, const bool* flags, void** outs,
+                                    void* sampler, const void* pos, const unsigned char* mine, const float* args, size_t count,
+                                    void* slots, float a114, uint64_t* lodCount, uint32_t* first) {
+    InterlockedIncrement64(&g_ownViews);
+    if (!ReadLods(self, lodCount, first)) {
+        InterlockedIncrement64(&g_noSpare);
+        NoteFault("the model's LOD table", self);
+        g_parse(self, inst, n, infos, flags, outs, sampler, pos);
+        return Did::NoSpare;
+    }
+    const int lods = *lodCount <= static_cast<uint64_t>(kLodSlots) && *first < *lodCount ? static_cast<int>(*lodCount - *first) : 0;
+    if (lods <= 0 || lods * 2 > kLodSlots || count > kMaxArgs) {
+        InterlockedIncrement64(&g_noSpare);
+        LogRefusal(self, count > kMaxArgs ? "too many arguments" : lods <= 0 ? "LOD table implausible" : "more than 8 LODs",
+                   *lodCount, *first);
+        g_parse(self, inst, n, infos, flags, outs, sampler, pos);
+        return Did::NoSpare;
+    }
+    float* buf = t_buf;
+    if (!CopyFloats(buf, args, count)) {
+        NoteFault("the arguments", self);
+        g_parse(self, inst, n, infos, flags, outs, sampler, pos);
+        return Did::Plain;
+    }
+    buf[kArg] = 0.0f;   // as seen from outside the cockpit
+    // The two subsets, each in DCS's order. The one holding DCS's last collection runs last, so whatever the
+    // model notes from the last collection of the call comes from the same collection as before.
+    const void* infA[kMaxInfos];
+    const void* infB[kMaxInfos];
+    bool flA[kMaxInfos], flB[kMaxInfos];
+    void* outA[kMaxInfos];
+    void* outB[kMaxInfos];
+    unsigned na = 0, nb = 0;
+    for (unsigned i = 0; i < n; ++i) {
+        if (mine[i]) {
+            infA[na] = infos[i], flA[na] = flags[i], outA[na] = outs[i], ++na;
+        } else {
+            infB[nb] = infos[i], flB[nb] = flags[i], outB[nb] = outs[i], ++nb;
+        }
+    }
+    if (InterlockedCompareExchange(&g_loggedFirst, 1, 0) == 0) {
+        char name[64];
+        ReadModelName(self, name, sizeof(name));
+        Log("OWNCANOPY first parse of your aircraft for ILARTS's views: model '%s', %u of %u collections, argument 114 = %.2f, "
+            "LOD entries %llu from %u = %d LODs (DCS's slots 0..%d, ILARTS's %d..%d, evaluated with 114 = 0)",
+            name, na, n, a114, static_cast<unsigned long long>(*lodCount), *first, lods, lods - 1, lods, 2 * lods - 1);
+    }
+    NoteTarget(self, inst, slots, *lodCount, *first, lods);
+    auto runMine = [&] {
+        ShiftScope s(lods, slots, buf, count);
+        g_parse(self, inst, na, infA, flA, outA, sampler, pos);
+    };
+    if (nb == 0) {
+        runMine();
+        return Did::OnlyIlarts;
+    }
+    InterlockedIncrement64(&g_split);
+    if (mine[n - 1]) {
+        g_parse(self, inst, nb, infB, flB, outB, sampler, pos);
+        runMine();
+    } else {
+        runMine();
+        g_parse(self, inst, nb, infB, flB, outB, sampler, pos);
+    }
+    return Did::Split;
+}
+
+// A near line: who this object is (instance, graphics instance, arguments), which collections (views) the
+// call carried, what the wrapper did, and which LOD slots were used with which value of 114.
+__declspec(noinline) void LogSample(void* self, void* inst, float dist, unsigned n, const void* const* infos, const bool* flags,
+                                    const unsigned char* mine, int k, const float* args, size_t count, void* slots, float a114,
+                                    Did did, uint64_t lodCount, uint32_t first, unsigned mask) {
+    char name[64], colls[700], used[160];
+    ReadModelName(self, name, sizeof(name));
+    FormatColls(n, infos, flags, mine, colls, sizeof(colls));
+    FormatSlots(slots, mask, used, sizeof(used));
+    const char* what = did == Did::Split ? "split" : did == Did::OnlyIlarts ? "ilarts-only" : did == Did::NoSpare ? "NOT split (no spare slots)" : "plain";
+    Log("OWNCANOPY near: '%s' %.1f m, thread %lu, model %p instance %p graphics %p args %p (%zu), 114=%.3g | %u collections "
+        "(%d ILARTS): %s | %s, LOD entries %llu from %u | slots used (114 there): %s",
+        name, dist, GetCurrentThreadId(), self, inst, slots, args, count, a114, n, k, colls, what,
+        static_cast<unsigned long long>(lodCount), first, used);
+}
+
+__declspec(noinline) void LogShared(void* self, void* inst, void* owner, void* slots, float a114, int k) {
+    char name[64];
+    ReadModelName(self, name, sizeof(name));
+    Log("OWNCANOPY anomaly: graphics instance %p of your aircraft (instance %p, 114 set within 2 s) parsed by instance %p, "
+        "model '%s' %p, 114 = %.3g, %d ILARTS collection(s); left to DCS",
+        slots, owner, inst, name, self, a114, k);
+}
 
 void ParseWrap(void* self, void* inst, unsigned n, const void* const* infos, const bool* flags, void** outs, void* sampler,
                const void* pos) {
@@ -435,9 +595,9 @@ void ParseWrap(void* self, void* inst, unsigned n, const void* const* infos, con
     } else {
         k = Classify(n, infos, v, mine);
         if (k < 0) {
-            InterlockedIncrement64(&g_faults);
             memset(mine, 0, n);
             k = 0;
+            NoteFault("the collections' cameras", self);
         }
         if (k > 0) {
             Count(kWithOurs);
@@ -453,7 +613,6 @@ void ParseWrap(void* self, void* inst, unsigned n, const void* const* infos, con
     }
     RaiseMax(&g_maxArgs, static_cast<long>(count));
     float a114 = 0;
-    bool ownCookie = false;   // 114 not set, but the graphics instance is your aircraft's
     if (count > kArg && CopyFloats(&a114, args + kArg, 1)) {
         Count(kHas114);
         if (a114 != 0.0f) {
@@ -470,134 +629,151 @@ void ParseWrap(void* self, void* inst, unsigned n, const void* const* infos, con
                     a114, name, count, k, n);
             }
         }
-        if (a114 >= 0.5f) {
-            Count(kSet114);
-            if (k > 0) Count(kSet114Ours);
-            RememberOwn(slots);
-        } else if (IsOwn(slots)) {
-            ownCookie = true;
-            Count(kOwnCookie0);
-            if (k > 0) Count(kOwnCookie0Ours);
-        }
+    }
+    const bool own = a114 >= 0.5f;
+    if (own) {
+        Count(kSet114);
+        if (k > 0) Count(kSet114Ours);
+        RememberOwn(slots, inst);
+    } else if (void* owner = SharedWithOwn(slots, inst)) {
+        // Another instance on a graphics instance your aircraft used within 2 s: not split (see g_own).
+        Count(kShared);
+        if (AnomalyLine(kAnShared)) LogShared(self, inst, owner, slots, a114, k);
     }
     bool sample = false;
-    float dist = -1.0f;
-    {
-        dist = DistToMainCamera(pos, infos[0]);
-        if (dist >= 0 && dist < kNearMainM) {
-            Count(kNearMain);
-            if (k > 0) Count(kNearMainOurs);
-            if (a114 >= 0.5f) Count(kNearMain114);
-            if (g_nearLogs < kMaxNearLogs) LogNear(self, inst, dist, args, count, k, n);
-            sample = g_sampleBudget > 0 && InterlockedDecrement(&g_sampleBudget) >= 0;
-        }
+    const float dist = DistToMainCamera(pos, infos[0]);
+    if (dist >= 0 && dist < kNearMainM) {
+        Count(kNearMain);
+        if (k > 0) Count(kNearMainOurs);
+        if (own) Count(kNearMain114);
+        if (g_nearLogs < kMaxNearLogs) LogNear(self, inst, dist, args, count, k, n);
+        sample = g_sampleBudget > 0 && (own || !g_sampleOwnOnly) && InterlockedDecrement(&g_sampleBudget) >= 0;
     }
-    Did did = Did::Plain;
-    uint64_t lodCount = 0;
-    uint32_t first = 0;
-    int lods = 0;
-    unsigned na = 0, nb = 0;
     if (sample) {
         t_diagSlots = slots;
         t_diagMask = 0;
     }
-    [&] {
-        if (k <= 0 || count <= kArg || !(a114 >= 0.5f || ownCookie)) return g_parse(self, inst, n, infos, flags, outs, sampler, pos);
-        // Your aircraft (argument 114 set: you are in its cockpit; or its graphics instance), seen by one of
-        // ILARTS's views.
-        InterlockedIncrement64(&g_ownViews);
-        if (!ReadLods(self, &lodCount, &first)) {
-            InterlockedIncrement64(&g_faults);
-            InterlockedIncrement64(&g_noSpare);
-            did = Did::NoSpare;
-            return g_parse(self, inst, n, infos, flags, outs, sampler, pos);
-        }
-        lods = lodCount <= static_cast<uint64_t>(kLodSlots) && first < lodCount ? static_cast<int>(lodCount - first) : 0;
-        if (lods <= 0 || lods * 2 > kLodSlots || count > kMaxArgs) {
-            InterlockedIncrement64(&g_noSpare);
-            LogRefusal(self, count > kMaxArgs ? "too many arguments" : lods <= 0 ? "LOD table implausible" : "more than 8 LODs",
-                       lodCount, first);
-            did = Did::NoSpare;
-            return g_parse(self, inst, n, infos, flags, outs, sampler, pos);
-        }
-        float* buf = t_buf;
-        if (!CopyFloats(buf, args, count)) {
-            InterlockedIncrement64(&g_faults);
-            return g_parse(self, inst, n, infos, flags, outs, sampler, pos);
-        }
-        buf[kArg] = 0.0f;   // as seen from outside the cockpit
-        // The two subsets, each in DCS's order. The one holding DCS's last collection runs last, so whatever the
-        // model notes from the last collection of the call comes from the same collection as before.
-        const void* infA[kMaxInfos];
-        const void* infB[kMaxInfos];
-        bool flA[kMaxInfos], flB[kMaxInfos];
-        void* outA[kMaxInfos];
-        void* outB[kMaxInfos];
-        for (unsigned i = 0; i < n; ++i) {
-            if (mine[i]) {
-                infA[na] = infos[i], flA[na] = flags[i], outA[na] = outs[i], ++na;
-            } else {
-                infB[nb] = infos[i], flB[nb] = flags[i], outB[nb] = outs[i], ++nb;
-            }
-        }
-        if (InterlockedCompareExchange(&g_loggedFirst, 1, 0) == 0) {
-            char name[64];
-            ReadModelName(self, name, sizeof(name));
-            Log("OWNCANOPY first parse of your aircraft for ILARTS's views: model '%s', %u of %u collections, argument 114 = %.2f, "
-                "LOD entries %llu from %u = %d LODs (DCS's slots 0..%d, ILARTS's %d..%d, evaluated with 114 = 0)",
-                name, na, n, a114, static_cast<unsigned long long>(lodCount), first, lods, lods - 1, lods, 2 * lods - 1);
-        }
-        auto runMine = [&] {
-            ShiftScope s(lods, slots, buf, count);
-            g_parse(self, inst, na, infA, flA, outA, sampler, pos);
-        };
-        if (nb == 0) {
-            did = Did::OnlyIlarts;
-            runMine();
-            return;
-        }
-        did = Did::Split;
-        InterlockedIncrement64(&g_split);
-        if (mine[n - 1]) {
-            g_parse(self, inst, nb, infB, flB, outB, sampler, pos);
-            runMine();
-        } else {
-            runMine();
-            g_parse(self, inst, nb, infB, flB, outB, sampler, pos);
-        }
-    }();
+    Did did = Did::Plain;
+    uint64_t lodCount = 0;
+    uint32_t first = 0;
+    if (k > 0 && count > kArg && own)
+        did = SplitParse(self, inst, n, infos, flags, outs, sampler, pos, mine, args, count, slots, a114, &lodCount, &first);
+    else
+        g_parse(self, inst, n, infos, flags, outs, sampler, pos);
     if (!sample) return;
-    // A near line: who this object is (instance, graphics instance, arguments), which collections (views) the
-    // call carried, what the wrapper did, and which LOD slots were used with which value of 114.
     t_diagSlots = nullptr;
-    const unsigned mask = t_diagMask;
-    char name[64], colls[700], used[160];
-    ReadModelName(self, name, sizeof(name));
-    FormatColls(n, infos, flags, mine, colls, sizeof(colls));
-    FormatSlots(slots, mask, used, sizeof(used));
-    const char* what = did == Did::Split ? "split" : did == Did::OnlyIlarts ? "ilarts-only" : did == Did::NoSpare ? "NOT split (no spare slots)" : "plain";
-    Log("OWNCANOPY near: '%s' %.1f m, thread %lu, model %p instance %p graphics %p args %p (%zu), 114=%.3g%s | %u collections "
-        "(%d ILARTS): %s | %s, LOD entries %llu from %u | slots used (114 there): %s",
-        name, dist, GetCurrentThreadId(), self, inst, slots, args, count, a114, ownCookie ? " (graphics of your aircraft)" : "", n, k,
-        colls, what, static_cast<unsigned long long>(lodCount), first, used);
+    LogSample(self, inst, dist, n, infos, flags, mine, k, args, count, slots, a114, did, lodCount, first, t_diagMask);
 }
 
-// Every per-LOD instance fetch of NGModelLodsMT::ParseMT2 comes through here (the redirected call).
+__declspec(noinline) void LogFetchAnomaly(Anomaly a, const void* slots, int64_t index, const void* lodRoot, const void* bound,
+                                          int shift) {
+    switch (a) {
+    case kAnDcsRange:
+        Log("OWNCANOPY anomaly: DCS fetched per-LOD slot %lld of graphics %p (LOD root %p): outside the cookie's %d slots "
+            "(DCS's own fetch, left alone)",
+            static_cast<long long>(index), slots, lodRoot, kLodSlots);
+        break;
+    case kAnDcsOtherRoot:
+        Log("OWNCANOPY anomaly: DCS's per-LOD slot %lld of graphics %p is bound to LOD root %p but fetched for LOD root %p "
+            "(DCS's own fetch, left alone)",
+            static_cast<long long>(index), slots, bound, lodRoot);
+        break;
+    case kAnConflict:
+        Log("OWNCANOPY anomaly: spare slot %lld of graphics %p bound to LOD root %p, wanted %p; that fetch left to DCS's slot %lld",
+            static_cast<long long>(index + shift), slots, bound, lodRoot, static_cast<long long>(index));
+        break;
+    case kAnNotRedirected:
+        Log("OWNCANOPY anomaly: ILARTS's parse fetched slot %lld of graphics %p (LOD root %p), %d LOD(s): left to DCS",
+            static_cast<long long>(index), slots, lodRoot, shift);
+        break;
+    default:
+        Log("OWNCANOPY anomaly: fault reading slot %lld of graphics %p", static_cast<long long>(index), slots);
+        break;
+    }
+}
+
+// Every per-LOD instance fetch of NGModelLodsMT::ParseMT2 comes through here (the redirected call): DCS's
+// own fetches for every object, and those of ILARTS's parse of your aircraft. Only the latter are changed.
 void* FetchWrap(void* slots, int64_t index, const void* args, const void* lodRoot, uint64_t flag) {
+    Count(kFetches);
+    if (index < 0 || index >= kLodSlots) {
+        // Never expected (ParseMT2 fetches entry i into slot i - first, i >= first). Not ours to change.
+        InterlockedIncrement64(&g_dcsRange);
+        if (AnomalyLine(kAnDcsRange)) LogFetchAnomaly(kAnDcsRange, slots, index, lodRoot, nullptr, 0);
+        return g_fetch(slots, index, args, lodRoot, flag);
+    }
     const int shift = t_shift;
-    if (shift > 0 && slots == t_slots && index >= 0 && index < shift) {
-        // The spare slot must be unused or bound to this same LOD (a slot keeps the root of its first fetch).
-        const void* bound = SlotRoot(slots, index + shift);
-        if (!bound || bound == lodRoot) {
-            index += shift;
-            args = &t_vec;
-            InterlockedIncrement64(&g_remaps);
+    bool redirected = false;
+    if (shift > 0 && slots == t_slots) {
+        if (index < shift && index + shift < kLodSlots) {
+            // The spare slot must be unused or bound to this same LOD (a slot keeps the root of its first fetch).
+            const void* bound = SlotRoot(slots, index + shift);
+            if (bound == kFaulted) {
+                InterlockedIncrement64(&g_faults);
+                if (AnomalyLine(kAnFault)) LogFetchAnomaly(kAnFault, slots, index + shift, lodRoot, nullptr, 0);
+            } else if (!bound || bound == lodRoot) {
+                index += shift;
+                args = &t_vec;
+                redirected = true;
+                InterlockedIncrement64(&g_remaps);
+            } else {
+                InterlockedIncrement64(&g_conflicts);
+                if (AnomalyLine(kAnConflict)) LogFetchAnomaly(kAnConflict, slots, index, lodRoot, bound, shift);
+            }
         } else {
-            InterlockedIncrement64(&g_conflicts);
+            InterlockedIncrement64(&g_notRedirected);
+            if (AnomalyLine(kAnNotRedirected)) LogFetchAnomaly(kAnNotRedirected, slots, index, lodRoot, nullptr, shift);
         }
     }
-    if (slots == t_diagSlots && index >= 0 && index < kLodSlots) t_diagMask |= 1u << index;
+    if (!redirected) {
+        // DCS's own slot: it should be unused or bound to this LOD's root. NGModel's fetch does not check that; a
+        // slot bound to another LOD would have this LOD evaluated into an instance laid out for the other one.
+        const void* bound = SlotRoot(slots, index);
+        if (bound && bound != kFaulted && bound != lodRoot) {
+            InterlockedIncrement64(&g_dcsOtherRoot);
+            if (AnomalyLine(kAnDcsOtherRoot)) LogFetchAnomaly(kAnDcsOtherRoot, slots, index, lodRoot, bound, 0);
+        }
+    }
+    if (slots == t_diagSlots) t_diagMask |= 1u << index;
     return g_fetch(slots, index, args, lodRoot, flag);
+}
+
+// Each mission gets its own first-time lines, line budgets and counters (install runs once per mission).
+void ResetDiagnostics() {
+    InterlockedExchange(&g_loggedFirst, 0);
+    InterlockedExchange(&g_logged114, 0);
+    for (void*& p : g_nearLogged) p = nullptr;
+    InterlockedExchange(&g_nearLogs, 0);
+    InterlockedExchange(&g_sampleBudget, 0);
+    InterlockedExchange(&g_sampleOwnOnly, 0);
+    g_sampleWindows = 0;
+    InterlockedExchange(&g_refusalLogs, 0);
+    for (volatile long& a : g_anomalyLogs) InterlockedExchange(&a, 0);
+    InterlockedExchangePointer(&g_targetInst, nullptr);
+    InterlockedExchangePointer(&g_targetSlots, nullptr);
+    InterlockedExchange(&g_targetLogs, 0);
+    for (OwnCookie& o : g_own) {
+        o.slots = nullptr;
+        o.inst = nullptr;
+        o.tick = 0;
+    }
+    g_nextStats = 0;
+    g_statsLines = 0;
+    g_viewLinesLast = -1;
+    g_viewLines = 0;
+    g_viewTick = 0;
+    for (Shard& s : g_shards)
+        for (int i = 0; i < kCtrs; ++i) InterlockedExchange64(&s.c[i], 0);
+    for (volatile long long* c : {&g_ownViews, &g_split, &g_remaps, &g_noSpare, &g_conflicts, &g_notRedirected, &g_faults,
+                                  &g_dcsRange, &g_dcsOtherRoot, &g_builds, &g_buildsWithViews})
+        InterlockedExchange64(c, 0);
+    InterlockedExchange(&g_maxN, 0);
+    InterlockedExchange(&g_maxOurs, 0);
+    InterlockedExchange(&g_maxArgs, 0);
+    InterlockedExchange(&g_maxViews, 0);
+    AcquireSRWLockExclusive(&g_diagLock);
+    g_any114 = false;
+    ReleaseSRWLockExclusive(&g_diagLock);
 }
 
 unsigned char* AllocNear(const void* anchor, size_t size) {
@@ -681,16 +857,23 @@ void OwnCanopyBuildEnd(const void* graph) {
     const ULONGLONG now = GetTickCount64();
     if (!g_nextStats) {
         g_nextStats = now + kStatsMs;
-        g_sampleBudget = kSamplesPerWindow;
+        InterlockedExchange(&g_sampleOwnOnly, 0);
+        InterlockedExchange(&g_sampleBudget, kSamplesPerWindow);
         ++g_sampleWindows;
     }
-    if (now >= g_nextStats && g_statsLines < kMaxStatsLines) {
-        g_nextStats = now + kStatsMs;
+    if (now >= g_nextStats && g_statsLines < kMaxStatsLines + kMaxSummaryLines) {
+        const bool summary = g_statsLines >= kMaxStatsLines;   // this line closes a 5-minute period
         ++g_statsLines;
-        // The near lines of the next window (the first parses of objects near your camera after this point).
+        g_nextStats = now + (g_statsLines < kMaxStatsLines ? kStatsMs : kSummaryMs);
+        // The near lines of the next period (the first parses of objects near your camera after this point): 8 per
+        // 15 s window at first, then 2 per summary period and only for your aircraft (its slots and 114 values).
         if (g_sampleWindows < kSampleWindows) {
             ++g_sampleWindows;
+            InterlockedExchange(&g_sampleOwnOnly, 0);
             InterlockedExchange(&g_sampleBudget, kSamplesPerWindow);
+        } else if (g_statsLines >= kMaxStatsLines) {
+            InterlockedExchange(&g_sampleOwnOnly, 1);
+            InterlockedExchange(&g_sampleBudget, kSamplesPerSummary);
         } else {
             InterlockedExchange(&g_sampleBudget, 0);
         }
@@ -708,26 +891,27 @@ void OwnCanopyBuildEnd(const void* graph) {
         Log("OWNCANOPY stats %ds: builds=%lld with_views=%lld views_max=%ld last_views=%d | parses=%lld over_%u=%lld (max n %ld) "
             "no_views=%lld with_ilarts=%lld (max %ld of them) args_unreadable=%lld (max args %ld) | arg114: present=%lld "
             "nonzero=%lld (%s) set=%lld set_with_ilarts=%lld | near_your_camera=%lld with_ilarts=%lld with_114=%lld | "
-            "graphics_of_yours_114_0=%lld with_ilarts=%lld | own_parses=%lld split=%lld lod_remaps=%lld slot_conflicts=%lld "
-            "no_spare_slots=%lld faults=%lld",
-            static_cast<int>(kStatsMs / 1000), InterlockedExchange64(&g_builds, 0), InterlockedExchange64(&g_buildsWithViews, 0),
-            InterlockedExchange(&g_maxViews, 0), v.n, c[kCalls], kMaxInfos, c[kOverN], InterlockedExchange(&g_maxN, 0),
-            c[kNoViews], c[kWithOurs], InterlockedExchange(&g_maxOurs, 0), c[kArgsFail], InterlockedExchange(&g_maxArgs, 0),
-            c[kHas114], c[kNonzero114], range, c[kSet114], c[kSet114Ours], c[kNearMain], c[kNearMainOurs], c[kNearMain114],
-            c[kOwnCookie0], c[kOwnCookie0Ours], InterlockedExchange64(&g_ownViews, 0), InterlockedExchange64(&g_split, 0),
-            InterlockedExchange64(&g_remaps, 0), InterlockedExchange64(&g_conflicts, 0), InterlockedExchange64(&g_noSpare, 0),
-            InterlockedExchange64(&g_faults, 0));
-        if (g_statsLines == kMaxStatsLines) Log("OWNCANOPY stats: last line (limit %d)", kMaxStatsLines);
+            "shared_graphics=%lld | own_parses=%lld split=%lld lod_remaps=%lld slot_conflicts=%lld not_redirected=%lld "
+            "no_spare_slots=%lld faults=%lld | fetches=%lld dcs_slot_out_of_range=%lld dcs_slot_other_root=%lld",
+            static_cast<int>((summary ? kSummaryMs : kStatsMs) / 1000), InterlockedExchange64(&g_builds, 0),
+            InterlockedExchange64(&g_buildsWithViews, 0), InterlockedExchange(&g_maxViews, 0), v.n, c[kCalls], kMaxInfos, c[kOverN],
+            InterlockedExchange(&g_maxN, 0), c[kNoViews], c[kWithOurs], InterlockedExchange(&g_maxOurs, 0), c[kArgsFail],
+            InterlockedExchange(&g_maxArgs, 0), c[kHas114], c[kNonzero114], range, c[kSet114], c[kSet114Ours], c[kNearMain],
+            c[kNearMainOurs], c[kNearMain114], c[kShared], InterlockedExchange64(&g_ownViews, 0), InterlockedExchange64(&g_split, 0),
+            InterlockedExchange64(&g_remaps, 0), InterlockedExchange64(&g_conflicts, 0), InterlockedExchange64(&g_notRedirected, 0),
+            InterlockedExchange64(&g_noSpare, 0), InterlockedExchange64(&g_faults, 0), c[kFetches], InterlockedExchange64(&g_dcsRange, 0),
+            InterlockedExchange64(&g_dcsOtherRoot, 0));
+        if (g_statsLines == kMaxStatsLines)
+            Log("OWNCANOPY stats: from now on one line every %d s (counts over that time)", static_cast<int>(kSummaryMs / 1000));
+        else if (g_statsLines == kMaxStatsLines + kMaxSummaryLines)
+            Log("OWNCANOPY stats: last line (limit %d)", kMaxStatsLines + kMaxSummaryLines);
     }
     // When the number of listed views changes (at most every 10 s, 20 lines): how many of the render graph's
     // collections carry one of these cameras (0 would mean the camera offset is wrong).
-    static int s_lastViews = -1, s_viewLines = 0;
-    static ULONGLONG s_viewTick = 0;
-    if (v.n == s_lastViews || now - s_viewTick < 10000 || s_viewLines >= 20 || !graph) return;
-    s_lastViews = v.n;
-    s_viewTick = now;
-    ++s_viewLines;
-    g_loggedViews = true;
+    if (v.n == g_viewLinesLast || now - g_viewTick < 10000 || g_viewLines >= 20 || !graph) return;
+    g_viewLinesLast = v.n;
+    g_viewTick = now;
+    ++g_viewLines;
     unsigned char* range[2] = {};
     int total = 0, matched = 0;
     char which[kMaxViews][96] = {};   // per view: its collection numbers
@@ -779,6 +963,7 @@ std::string OwnCanopyInstall() {
     int32_t rel = 0;
     memcpy(&rel, call + 1, 4);
     if (base + kFetchCallRva + 5 + rel != base + kFetchRva) return "NGModel+0x3DBE4 calls something else";
+    ResetDiagnostics();
     g_parse = reinterpret_cast<ParseFn>(base + kParseRva);
     g_fetch = reinterpret_cast<FetchFn>(base + kFetchRva);
     g_callSite = base + kFetchCallRva;
@@ -816,7 +1001,14 @@ std::string OwnCanopyInstall() {
 
 void OwnCanopyRemove() {
     g_enabled = 0;
+    // No view list carries over into the next mission (its first parses would match cameras of this one).
+    AcquireSRWLockExclusive(&g_viewLock);
+    g_pending.n = 0;
+    g_active.n = 0;
+    ReleaseSRWLockExclusive(&g_viewLock);
     if (!g_installed) return;
+    // The parse first (no new ILARTS parse starts), then the fetch call. A render worker still inside the
+    // wrapper, the stub or FetchWrap finishes normally: the code stays loaded and the stub stays allocated.
     WritePtr(g_vtblSlot, reinterpret_cast<void*>(g_parse));
     unsigned char nb[5];
     memcpy(nb, g_callSite, 5);
@@ -837,6 +1029,8 @@ void* OwnCanopyTestParseWrap() { return reinterpret_cast<void*>(&ParseWrap); }
 void* OwnCanopyTestFetchWrap() { return reinterpret_cast<void*>(&FetchWrap); }
 void OwnCanopyTestStatsNow() { g_nextStats = 1; }
 void OwnCanopyTestSampleNow() { g_sampleBudget = kSamplesPerWindow; }
+void OwnCanopyTestReset() { ResetDiagnostics(); }
+void OwnCanopyTestInstalled(bool on) { g_installed = on; }
 #endif
 
 std::string OwnCanopyStats() {
@@ -844,11 +1038,13 @@ std::string OwnCanopyStats() {
     AcquireSRWLockShared(&g_viewLock);
     v = g_active;
     ReleaseSRWLockShared(&g_viewLock);
-    char b[400];
+    char b[512];
     _snprintf_s(b, _countof(b), _TRUNCATE,
                 "installed=%d enabled=%d ilarts_views=%d (since the last OWNCANOPY stats line:) own_parses=%lld split=%lld "
-                "lod_remaps=%lld slot_conflicts=%lld no_spare_slots=%lld faults=%lld",
-                g_installed ? 1 : 0, g_enabled ? 1 : 0, v.n, g_ownViews, g_split, g_remaps, g_conflicts, g_noSpare, g_faults);
+                "lod_remaps=%lld slot_conflicts=%lld not_redirected=%lld no_spare_slots=%lld faults=%lld dcs_slot_out_of_range=%lld "
+                "dcs_slot_other_root=%lld",
+                g_installed ? 1 : 0, g_enabled ? 1 : 0, v.n, g_ownViews, g_split, g_remaps, g_conflicts, g_notRedirected, g_noSpare,
+                g_faults, g_dcsRange, g_dcsOtherRoot);
     return b;
 }
 

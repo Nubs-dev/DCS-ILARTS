@@ -48,7 +48,16 @@ void ExtraCamsTrack(int index, const double* p, double modelTime);
 // For the render origin fix: is the world position within `metres` of a camera that is rendering (as of this
 // frame)? And: is `name` the render target ("mfd30") of a camera that is rendering?
 bool ExtraCamsNear(const double* world, double metres);
+// Camera `index` shows a hangar deck position (the hook's view flag `hangar`): no rain or snow in its picture (rain.cpp).
+void ExtraCamsSetHangar(int index, bool hangar);
+// Is the world position within `metres` of a rendering camera that shows a hangar deck position?
+bool ExtraCamsHangarNear(const double* world, double metres);
 bool ExtraCamsTargetName(const char* name);
+
+// Does the cockpit itself use picture source `source` (0-31)? True if DCS filled it within the last 10 s (seen
+// each frame before the cameras add theirs, while the redirect runs), else from the source's own valid byte.
+// Any thread. The viewport resize (mfd.cpp) leaves such a source alone, as the cameras do.
+bool ExtraCamsCockpitSource(int source);
 
 void ExtraCamsRemove();
 

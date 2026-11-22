@@ -6,6 +6,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DCS ILARTS User Guide</title>
 <link rel="stylesheet" href="../../ui/fonts/fonts.css">
 <style>
@@ -64,6 +65,26 @@ figcaption { font-size: 8.4pt; color: var(--mute); margin-top: 3pt; }
 .toc { columns: 2; column-gap: 18pt; margin: 14pt 0 0; padding: 0; list-style: none; font-size: 10pt; }
 .toc li { margin: 0 0 3pt; }
 .toc span { color: var(--accent); font-family: 'IBM Plex Mono', monospace; margin-right: 6pt; }
+/* in a browser (docs\DCS-ILARTS-Guide.html): one page-wide column, the cover as tall as its content */
+@media screen {
+  body { max-width: 184mm; margin: 0 auto; padding: 24px 16px 48px; }
+  .cover { height: auto; }
+  .cover .meta { margin-top: 14pt; }
+  section { margin-top: 36pt; }
+  img { max-width: 100%; }
+}
+@media screen and (max-width: 640px) {
+  body { padding: 16px 16px 40px; overflow-wrap: break-word; }
+  .cover .band { padding: 16pt 14pt; }
+  .cover h1 { font-size: 24pt; flex-wrap: wrap; gap: 8pt; }
+  .cover h1 img.icon { width: 32pt; height: 32pt; }
+  .cover h1 .doc { font-size: 13pt; margin-left: 0; display: block; }
+  .cover .sub { font-size: 7.5pt; letter-spacing: .08em; }
+  .toc, .cols { columns: 1; display: block; }
+  td.c { white-space: normal; }
+  table:has(th:nth-child(4)) { display: block; overflow-x: auto; }   /* wide tables scroll sideways */
+  th, td { padding: 3pt 4pt; }
+}
 </style>
 </head>
 <body>
@@ -86,6 +107,7 @@ figcaption { font-size: 8.4pt; color: var(--mute); margin-top: 3pt; }
     <li><span>8</span>Keyboard</li>
     <li><span>9</span>Settings</li>
     <li><span>10</span>Problems</li>
+    <li><span>11</span>Limitations and known issues</li>
   </ul>
   <div class="meta">Version {{VERSION}}. For DCS World 2.9.31.29434 with the Supercarrier module.<br>
   DCS ILARTS is an independent community mod. Eagle Dynamics does not make, support or endorse it.
@@ -129,7 +151,8 @@ ILARTS stops and shows "DCS version not compatible". DCS continues to operate co
 This decreases the DCS frame rate. A camera stops when no monitor shows it.</div>
 <h3>Privacy</h3>
 <p>ILARTS collects no data. It has no telemetry and no account. ILARTS keeps all of its files on your computer: the recordings, the stills, the settings and the log.
-ILARTS connects to a network only for an RTMP stream that you set up, to the server that you enter. Future versions can include an optional automatic check for updates.</p>
+ILARTS connects to a network only for two things: an RTMP stream that you set up, to the server that you enter, and the check for updates.
+The check for updates asks the public GitHub API for the newest release once a day. It sends no data about you or your computer. You can set it to off (refer to "Update ILARTS" in section 2).</p>
 <p>The log (<code>%LOCALAPPDATA%\ILARTS\ILARTS.log</code>) can show your Windows user name in file paths. It goes to other persons only if you attach it to a problem report.
 The ILARTS window uses the Microsoft WebView2 runtime. The runtime follows your Windows diagnostic data settings.</p>
 </section>
@@ -145,6 +168,7 @@ If DCS or a different mod does not operate correctly after you install ILARTS, r
 <li>Start <code>DCS-ILARTS-Setup-&lt;version&gt;.exe</code>.</li>
 <li>Make sure that the folder is your DCS Saved Games folder, for example <code>Saved Games\DCS</code>.</li>
 <li>For webcams in Discord, Teams or Zoom, select "Virtual cameras".</li>
+<li>Keep "Check for updates" selected if you want ILARTS to tell you about new versions.</li>
 <li>Click <span class="key">INSTALL</span>.</li>
 <li>If Windows asks for administrator approval for the virtual cameras, click <span class="key">YES</span>.</li>
 <li>Click <span class="key">FINISH</span>.</li>
@@ -196,6 +220,18 @@ Then start ILARTS yourself from the Start menu or from <code>ILARTS.exe</code>.<
 <p>REPAIR replaces the hook, adds the hook permissions and removes the hook of the old name (LSODiagnostic).
 It installs the camera component again if it is missing. It also shows if your DCS version is compatible.</p>
 <div class="note"><b>NOTE</b>REPAIR cannot make an incompatible DCS version operate. If the result shows "not compatible", install a newer ILARTS version.</div>
+<h3>Update ILARTS</h3>
+<p>Once a day ILARTS asks GitHub if there is a newer release. When there is one, the title bar shows a download icon and <span class="key">1.1.0 AVAILABLE</span> (the new version number).</p>
+<ol class="steps">
+<li>Close DCS. While DCS operates, the menu shows "CLOSE DCS TO INSTALL".</li>
+<li>Click <span class="key">1.1.0 AVAILABLE</span> in the title bar.</li>
+<li>Click <span class="key">INSTALL</span>. The title bar shows the download progress (for example 1.1.0 · 37%).</li>
+<li>ILARTS closes. The setup program installs the new version with your previous selections, then starts ILARTS again.</li>
+</ol>
+<p>Before it installs, ILARTS makes sure that the download is the file published with the release. If the check fails, the title bar shows <span class="key">UPDATE FAILED</span>. Point at it to see the reason. Click it and then <span class="key">TRY AGAIN</span>, or download the setup program from the release page.</p>
+<p>The other menu items: <span class="key">RELEASE NOTES</span> opens the release page on GitHub. <span class="key">SKIP THIS VERSION</span> hides the update until a newer version is released.</p>
+<p>If you installed ILARTS with OMM, OvGME or manually, the menu shows <span class="key">RELEASE PAGE</span> instead of INSTALL. Download the new zip from that page and install it as before.</p>
+<p>To stop the check for updates, set <span class="key">SETTINGS</span> &gt; Installation &gt; Check for updates to off, or clear "Check for updates" in the setup program. A new installation keeps your selection.</p>
 <h3>Remove ILARTS</h3>
 <ul>
 <li>Setup program: open Windows Settings &gt; Apps, select DCS ILARTS and click Uninstall. This also removes the hook permissions and the virtual cameras.</li>
@@ -233,7 +269,7 @@ It installs the camera component again if it is missing. It also shows if your D
 </figure>
 <table>
 <thead><tr><th>#</th><th>Component</th><th>Function</th></tr></thead>
-<tr><td>1</td><td>Title bar</td><td>Shows the program source and its frame rate. <span class="key">?</span> opens this guide. <span class="key">SETTINGS</span> opens the settings. Only while there is a benchmark, a lamp shows its state (refer to "Benchmark"). Drag the title bar to move the window.</td></tr>
+<tr><td>1</td><td>Title bar</td><td>Shows the program source and its frame rate. <span class="key">?</span> opens this guide. <span class="key">SETTINGS</span> opens the settings. Only while there is a benchmark, a lamp shows its state (refer to "Benchmark"). Only when a new version is available, a download icon and <span class="key">&lt;version&gt; AVAILABLE</span> show it (refer to "Update ILARTS" in section 2). Drag the title bar to move the window.</td></tr>
 <tr><td>2</td><td>Monitor A</td><td>The program monitor. The black box and stream source "Monitor A" use this picture.</td></tr>
 <tr><td>3</td><td>Monitor B</td><td>A second monitor with its own controls. It shows in layout 2 only.</td></tr>
 <tr><td>4</td><td>SOURCE</td><td>Selects the picture on the monitor. Refer to section 4.</td></tr>
@@ -303,7 +339,7 @@ Drag an edge of the window to change its size.</p>
 <p>With the target "recovery", the camera follows each landing aircraft from the round down. It stops when the aircraft taxis out of the wires.
 With a catapult target, it follows the aircraft on the catapult through the launch.</p>
 <div class="note"><b>NOTE</b>When you move the joystick, AUTO stops. Push AUTO or REST to cancel the manual control.</div>
-<p>The hangar cameras do not follow aircraft. Their PTZ panel has no AUTO and no TARGET: a hangar camera stays where you put it.</p>
+<p>The hangar cameras do not follow aircraft. Their PTZ panel has no AUTO and no TARGET: a hangar camera stays where you put it. Rain and snow are never drawn in the hangar.</p>
 <div class="caution"><b>CAUTION</b>A camera in FLIR decreases the DCS frame rate much more than a camera in the normal picture.
 Use FLIR on one camera at a time. Each camera starts in the normal picture when ILARTS starts.</div>
 </section>
@@ -604,7 +640,8 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <tr><td rowspan="3">Benchmark</td><td>Benchmark next mission</td><td>Off</td><td></td><td>Measures the frame rate cost of ILARTS at the next mission start. The setting goes off when the benchmark starts. Refer to "Benchmark" below.</td></tr>
 <tr><td>Last report</td><td></td><td></td><td>OPEN shows the newest benchmark report.</td></tr>
 <tr><td>Reports</td><td></td><td></td><td>OPEN shows the folder with the benchmark reports, <code>%LOCALAPPDATA%\ILARTS\benchmarks</code>.</td></tr>
-<tr><td rowspan="4">Installation</td><td>Version</td><td></td><td></td><td>The installed ILARTS version. Give it in a problem report.</td></tr>
+<tr><td rowspan="5">Installation</td><td>Version</td><td></td><td></td><td>The installed ILARTS version. Give it in a problem report.</td></tr>
+<tr><td>Check for updates</td><td>On</td><td></td><td>Once a day, asks GitHub for a newer version and shows it in the title bar. Refer to section 2.</td></tr>
 <tr><td>Check and repair</td><td></td><td></td><td>REPAIR: refer to section 2.</td></tr>
 <tr><td>DCS permissions</td><td></td><td></td><td>ADD or REMOVE the hook permissions in <code>autoexec.cfg</code>. Refer to section 2.</td></tr>
 <tr><td>Logs</td><td></td><td></td><td>OPEN shows the folder with the log file, <code>ILARTS.log</code>.</td></tr>
@@ -701,6 +738,21 @@ or operate incorrectly. These settings are off when you install ILARTS. Use them
 <p>If the problem continues, make a problem report at <code>github.com/Nubs-dev/DCS-ILARTS/issues</code>.
 You can also report it in the #ilarts-issues forum on <a href="https://discord.gg/qsjedwKHNr"><code>Discord</code></a>. Give the ILARTS version (SETTINGS &gt; Installation &gt; Version) and attach the log file: <code>%LOCALAPPDATA%\ILARTS\ILARTS.log</code>. To find it, click SETTINGS &gt; Installation &gt; Logs &gt; <span class="key">OPEN</span>.
 The camera component has its own log: <code>%ProgramData%\DCS ILARTS\ILARTSCam.log</code>.</p>
+</section>
+
+<section>
+<h2><span class="n">11</span>Limitations and known issues</h2>
+<p>In this section, "your player location" is where you are in DCS: in an aircraft, at the LSO or Air Boss station, and so on. It is not the location of the PLAT or of a camera in ILARTS.</p>
+<p>DCS calculates some parts of the picture only for the main viewport (the view on your screen) at your player location. The PLAT and the cameras in ILARTS are separate views. They cannot get these parts from DCS. These items are not problems in your installation.</p>
+<table>
+<thead><tr><th>Item</th><th>What you see</th><th>Cause</th></tr></thead>
+<tr><td>Sun shadows</td><td>The PLAT and the cameras show no sun shadows, also when you are at the LSO station. For example, the shadow of the island is not on the deck.</td><td>DCS calculates sun shadows only for the main viewport. The PLAT of DCS has the same limitation.</td></tr>
+<tr><td>Light on the deck</td><td>When your player location is far from the carrier, the deck in the PLAT and the cameras can look darker or flatter than when it is near the carrier. This is easier to see in overcast weather and in rain.</td><td>DCS calculates the reflections and the light from the sky at your player location, and uses them for all views.</td></tr>
+<tr><td>Clouds and rain far away</td><td>When the carrier is more than 200 km from your player location, the clouds and the rain in the PLAT and the cameras can be different from the weather at the carrier.</td><td>DCS keeps cloud data only for 200 km around your player location.</td></tr>
+<tr><td>Rain at medium altitude</td><td>In warm weather, when your player location is at approximately 2.5 to 3.5 km, the rain in the PLAT and the cameras is lighter.</td><td>DCS changes part of the rain to snow for all views when the air at your player location is near 0 &deg;C.</td></tr>
+<tr><td>Rain with time acceleration</td><td>With time acceleration, the rain streaks in the PLAT and the cameras are longer than in the main viewport.</td><td>The cameras use the speed of the carrier in real time.</td></tr>
+<tr><td>Multiplayer client</td><td>File names have no LSO grade. The black box does not save automatically after a crash or an ejection.</td><td>DCS sends these events only to the host (section 1).</td></tr>
+</table>
 </section>
 
 </body>

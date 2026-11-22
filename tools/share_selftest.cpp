@@ -124,7 +124,8 @@ bool TestFormat(IDXGIAdapter1* adapter, DXGI_FORMAT fmt, const char* name, uint3
 
 // --serve <seconds> [--mission NAME ...] [--mission-every S] <capture.dds> [capture.dds ...]: publishes captured
 // DCS frames through the real sharing protocol (same mapping, flags, keyed mutex and naming as src/share.cpp) so the
-// viewer can be tested without DCS. Target name = file name up to the first '-' (e.g. LSOFRAME-2026...dds).
+// viewer can be tested without DCS. Target name = file name up to the first '-' (e.g. LSOFRAME-2026...dds); several
+// files with the same name are a sequence (--fps).
 // Uses the adapter with the most dedicated VRAM (the discrete GPU DCS uses).
 // --passes <own>:<flags>,<flags>,... (with --serve, before the .dds files): also fakes the hook's passes (protocol v8 whose-pass
 // flags): Header::ownAircraft = <own> (0 not reported, 1 in an aircraft, 2 none) and one pass per <flags> value (bits:
@@ -520,9 +521,15 @@ void FakeBenchStop() {
 
 // --mission: stands in for the hook's mission (Header::passEpoch and missionName, v8); with several, the next one
 // starts every --mission-every seconds (default 10), each with a new epoch, as a mission restart does.
+// --fps <n> (with --serve, before the .dds files): files with the same target name (LSOFRAME-rain-00.dds,
+// LSOFRAME-rain-01.dds, ...) are that target's frames, served in turn at n frames per second (default 30), every
+// target counting from the same start: sequences of the same length (an LSOFRAME / hdrBufferMFD32 pair) stay paired.
+double g_seqFps = 30;
+
 struct Served {
     std::string name;
     ID3D11Texture2D* src = nullptr;
+    std::vector<ID3D11Texture2D*> more;  // a sequence's further frames (src is the first)
     ID3D11Texture2D* shared = nullptr;
     IDXGIKeyedMutex* km = nullptr;
     HANDLE handle = nullptr;
@@ -555,9 +562,27 @@ void SetMission(lsoshare::Header* hdr, const std::vector<std::wstring>& missions
     printf("mission %u: %s\n", hdr->passEpoch, utf8);
 }
 
-int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstring>& missions, int missionEvery) {
+int Serve(int seconds, int files, wchar_t** paths, const std::vector<std::wstring>& missions, int missionEvery) {
     const int camCount = g_cams.views ? lsoshare::kMaxCameras : 0;
-    if (count < 1 || count + camCount > lsoshare::kMaxTargets) { printf("1..%d dds files\n", lsoshare::kMaxTargets - camCount); return 1; }
+    // target name = file name up to the first '-'; files sharing a name are one target's frames
+    std::vector<std::string> names;
+    std::vector<std::vector<int>> groups;
+    for (int i = 0; i < files; ++i) {
+        std::wstring base = paths[i];
+        base = base.substr(base.find_last_of(L"\\/") + 1);
+        base = base.substr(0, base.find(L'-'));
+        std::string n;
+        for (wchar_t c : base) n += static_cast<char>(c);
+        const auto it = std::find(names.begin(), names.end(), n);
+        if (it != names.end()) {
+            groups[it - names.begin()].push_back(i);
+        } else {
+            names.push_back(n);
+            groups.push_back({i});
+        }
+    }
+    const int count = static_cast<int>(names.size());
+    if (count < 1 || count + camCount > lsoshare::kMaxTargets) { printf("1..%d targets\n", lsoshare::kMaxTargets - camCount); return 1; }
     IDXGIFactory1* fac = nullptr;
     CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&fac));
     IDXGIAdapter1 *a = nullptr, *best = nullptr;
@@ -596,11 +621,9 @@ int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstrin
         DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
         Served& s = served[i];
         if (i < count) {
-            if (!LoadDds(paths[i], file, w, h, fmt, bpp)) { printf("cannot load %ls\n", paths[i]); return 1; }
-            std::wstring base = paths[i];
-            base = base.substr(base.find_last_of(L"\\/") + 1);
-            base = base.substr(0, base.find(L'-'));
-            s.name.assign(base.begin(), base.end());
+            const wchar_t* path = paths[groups[i][0]];
+            if (!LoadDds(path, file, w, h, fmt, bpp)) { printf("cannot load %ls\n", path); return 1; }
+            s.name = names[i];
         } else {  // --cams: camera p's picture
             s.cam = i - count;
             s.name = "FAKECAM" + std::to_string(s.cam) + "_LDR";
@@ -609,6 +632,20 @@ int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstrin
         D3D11_TEXTURE2D_DESC d{w, h, 1, 1, fmt, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, 0, 0};
         D3D11_SUBRESOURCE_DATA init{file.data() + 148, w * bpp, 0};
         HRESULT hr = dev->CreateTexture2D(&d, &init, &s.src);
+        for (size_t f = 1; i < count && f < groups[i].size() && SUCCEEDED(hr); ++f) {  // the sequence's further frames
+            std::vector<unsigned char> more;
+            UINT mw = 0, mh = 0, mbpp = 0;
+            DXGI_FORMAT mfmt = DXGI_FORMAT_UNKNOWN;
+            const wchar_t* path = paths[groups[i][f]];
+            if (!LoadDds(path, more, mw, mh, mfmt, mbpp) || mw != w || mh != h || mfmt != fmt) {
+                printf("cannot load %ls as frame %zu of %s (size and format must match)\n", path, f, s.name.c_str());
+                return 1;
+            }
+            D3D11_SUBRESOURCE_DATA mi{more.data() + 148, w * bpp, 0};
+            ID3D11Texture2D* t = nullptr;
+            hr = dev->CreateTexture2D(&d, &mi, &t);
+            if (SUCCEEDED(hr)) s.more.push_back(t);
+        }
         d.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
         if (SUCCEEDED(hr)) hr = dev->CreateTexture2D(&d, nullptr, &s.shared);
         IDXGIResource1* r1 = nullptr;
@@ -628,7 +665,8 @@ int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstrin
         slot.active = 1;
         MemoryBarrier();
         slot.generation = 1;
-        printf("serving %s %ux%u fmt=%d\n", s.name.c_str(), w, h, fmt);
+        if (s.more.empty()) printf("serving %s %ux%u fmt=%d\n", s.name.c_str(), w, h, fmt);
+        else printf("serving %s %ux%u fmt=%d, %zu frames at %.1f per second\n", s.name.c_str(), w, h, fmt, s.more.size() + 1, g_seqFps);
         if (s.cam >= 0) {  // the camera itself
             FakeCam c;
             c.name = s.cam == 0 ? "ISLAND" : s.cam == 1 ? "DECK" : "DECK " + std::to_string(s.cam);
@@ -675,7 +713,12 @@ int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstrin
             Served& s = served[i];
             if (s.cam >= 0 && !hdr->cameras[s.cam].enabled) continue;  // a camera DCS does not render: no frames
             if (s.km->AcquireSync(0, 0) == S_OK) {
-                ctx->CopyResource(s.shared, s.src);
+                ID3D11Texture2D* src = s.src;
+                if (!s.more.empty()) {
+                    const size_t f = static_cast<size_t>((GetTickCount64() - begin) * g_seqFps / 1000.0) % (s.more.size() + 1);
+                    if (f) src = s.more[f - 1];
+                }
+                ctx->CopyResource(s.shared, src);
                 s.km->ReleaseSync(0);
                 InterlockedIncrement64(&hdr->targets[i].frameCounter);
                 ++copies;
@@ -695,6 +738,7 @@ int Serve(int seconds, int count, wchar_t** paths, const std::vector<std::wstrin
         SafeRelease(s.km);
         SafeRelease(s.shared);
         SafeRelease(s.src);
+        for (auto*& t : s.more) SafeRelease(t);
     }
     ctx->Release();
     dev->Release();
@@ -709,6 +753,7 @@ int wmain(int argc, wchar_t** argv) {
             if (wcscmp(argv[i], L"--mission") == 0) missions.push_back(argv[i + 1]);
             else if (wcscmp(argv[i], L"--mission-every") == 0) every = std::max(1, _wtoi(argv[i + 1]));
             else if (wcscmp(argv[i], L"--cams") == 0) g_cams.views = std::clamp(_wtoi(argv[i + 1]), 1, lsoshare::kMaxViews);
+            else if (wcscmp(argv[i], L"--fps") == 0) g_seqFps = std::clamp(_wtof(argv[i + 1]), 0.1, 240.0);
             else if (wcscmp(argv[i], L"--tuning") == 0) g_tuning.path = argv[i + 1];  // with --cams: an ILARTS-cameras.lua
             else if (wcscmp(argv[i], L"--bench") == 0) g_bench.ms = std::max(1.0, _wtof(argv[i + 1]));
             else if (wcscmp(argv[i], L"--bench-end") == 0) g_bench.endAt = _wtof(argv[i + 1]);

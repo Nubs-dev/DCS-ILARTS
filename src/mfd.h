@@ -23,6 +23,8 @@ std::string MfdLogViewports();
 // thread (DCS uses it from non-render threads). It records the size in the map read by
 // wTVPictureSourceProvider::get_target_size (used by CockpitBase to size what it draws into the
 // target - without it the PLAT symbology is laid out for 512) and queues the render-thread resize.
+// Refused for a cockpit picture source (0-31) the cockpit itself uses (extra_cams.h ExtraCamsCockpitSource);
+// MfdOnRenderThread leaves those alone too, so ILARTS never fights a cockpit TV display over its size.
 std::string MfdEnforceResolution(int index, int w, int h);
 
 // Current size of viewport `index` (0 x 0 = never set). Returns "" or why it cannot be read
@@ -32,6 +34,9 @@ std::string MfdViewportSize(int index, int* w, int* h);
 // Requests that viewport `index` be kept at w x h. Applied on the render thread (retried until the
 // viewport exists, re-applied if DCS resets it). w = h = 0 clears the request.
 std::string MfdRequestResolution(int index, int w, int h);
+
+// Forgets every request (sharing stopped: the mission ended). The next mission's cameras request again.
+void MfdClearRequests();
 
 // Called from the render-thread EndFrame callback.
 void MfdOnRenderThread();

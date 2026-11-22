@@ -41,7 +41,7 @@ set(ILARTS_VERSION_STR "${DCS_ILARTS_VERSION}")
 configure_file(src/version.h.in ${CMAKE_BINARY_DIR}/generated/ilarts_version.h @ONLY)
 include_directories(${CMAKE_BINARY_DIR}/generated)
 
-add_library(ILARTS SHARED src/common.cpp src/diagnostic.cpp src/engine.cpp src/capture.cpp src/share.cpp src/render_callback.cpp src/mfd.cpp src/lso_camera.cpp src/plat_ui.cpp src/clouds_probe.cpp src/plat_origin.cpp src/own_canopy.cpp src/map_objects.cpp
+add_library(ILARTS SHARED src/common.cpp src/diagnostic.cpp src/engine.cpp src/capture.cpp src/share.cpp src/render_callback.cpp src/mfd.cpp src/lso_camera.cpp src/plat_ui.cpp src/clouds_probe.cpp src/plat_origin.cpp src/origin_split.cpp src/own_canopy.cpp src/night_sky.cpp src/rain.cpp src/map_objects.cpp
     src/ship_trace.cpp src/memscan.cpp src/hullscan.cpp src/hull_refresh.cpp src/plat_cam.cpp src/compat.cpp
     src/extra_cams.cpp src/bench.cpp src/probe.cpp src/ILARTS.rc)
 target_compile_features(ILARTS PRIVATE cxx_std_17)
@@ -59,7 +59,7 @@ target_compile_features(lso_viewer PRIVATE cxx_std_17)
 target_compile_definitions(lso_viewer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lso_viewer PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(lso_viewer PRIVATE d3d11 dxgi d3dcompiler shell32 gdi32 user32 ole32 windowscodecs mfplat mf mfreadwrite mfuuid dwmapi ws2_32 oleaut32
-    dcomp shlwapi advapi32 version ${CMAKE_SOURCE_DIR}/third_party/webview2/build/native/x64/WebView2LoaderStatic.lib)
+    dcomp shlwapi advapi32 version winhttp bcrypt wintrust crypt32 ${CMAKE_SOURCE_DIR}/third_party/webview2/build/native/x64/WebView2LoaderStatic.lib)
 # The console interface: WebView2 SDK headers (third_party/webview2, Microsoft.Web.WebView2 NuGet package, BSD
 # licence) and the page itself, copied next to the executable.
 target_include_directories(lso_viewer PRIVATE third_party/webview2/build/native/include)
@@ -96,11 +96,35 @@ target_compile_features(share_selftest PRIVATE cxx_std_17)
 target_compile_definitions(share_selftest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(share_selftest PRIVATE d3d11 dxgi)
 
+# Offline test of the night-sky (stars in ILARTS's views) wrappers and patches (no DCS code runs; never deployed).
+add_executable(night_sky_test tools/night_sky_test.cpp src/night_sky.cpp)
+target_compile_features(night_sky_test PRIVATE cxx_std_17)
+target_compile_definitions(night_sky_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX NIGHT_SKY_TEST)
+target_compile_options(night_sky_test PRIVATE /W4 /permissive- /EHsc)
+
+# Offline test of the rain / snow wrapper (cameraVel per ILARTS view) and its patch (no DCS code runs; never deployed).
+add_executable(rain_test tools/rain_test.cpp src/rain.cpp src/night_sky.cpp)
+target_compile_features(rain_test PRIVATE cxx_std_17)
+target_compile_definitions(rain_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX RAIN_TEST)
+target_compile_options(rain_test PRIVATE /W4 /permissive- /EHsc)
+
 # Offline test of the own-canopy wrappers and patches (no DCS code runs; never deployed).
 add_executable(own_canopy_test tools/own_canopy_test.cpp src/own_canopy.cpp)
 target_compile_features(own_canopy_test PRIVATE cxx_std_17)
 target_compile_definitions(own_canopy_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX OWN_CANOPY_TEST)
 target_compile_options(own_canopy_test PRIVATE /W4 /permissive- /EHsc)
+
+# Offline test of the PLAT UI state search (src/plat_ui.cpp) with real Lua states from DCS's lua.dll (never deployed).
+add_executable(plat_ui_test tools/plat_ui_test.cpp src/plat_ui.cpp)
+target_compile_features(plat_ui_test PRIVATE cxx_std_17)
+target_compile_definitions(plat_ui_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX PLAT_UI_TEST)
+target_compile_options(plat_ui_test PRIVATE /W4 /permissive- /EHsc)
+
+# Offline test of the per-object origin split (no DCS code runs; never deployed).
+add_executable(origin_split_test tools/origin_split_test.cpp src/origin_split.cpp)
+target_compile_features(origin_split_test PRIVATE cxx_std_17)
+target_compile_definitions(origin_split_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX ORIGIN_SPLIT_TEST)
+target_compile_options(origin_split_test PRIVATE /W4 /permissive- /EHsc)
 
 # Offline test host (never deployed to DCS).
 add_executable(lsodiag_host host/lsodiag_host.cpp)

@@ -215,6 +215,7 @@ const SettingDef kSettings[] = {
     {L"Benchmark", L"benchmark", L"folder", L"Reports", L"action", L"", 0, 0, 0, L"", L"", L"%LOCALAPPDATA%\\ILARTS\\benchmarks", false},
     // "info": a value shown, not edited or saved
     {L"Installation", L"install", L"version", L"Version", L"info", L"", 0, 0, 0, L"", L"", L"", false},
+    {L"Installation", L"update", L"check", L"Check for updates", L"bool", L"1", 0, 0, 0, L"", L"", L"Once a day, from the DCS ILARTS releases on GitHub. A new version shows in the title bar", false},
     {L"Installation", L"install", L"repair", L"Check and repair", L"action", L"", 0, 0, 0, L"", L"", L"After a DCS update or if something stopped working: restores the hook and permissions, and checks the DCS version", false},
     {L"Installation", L"install", L"permissions", L"DCS permissions", L"action", L"", 0, 0, 0, L"", L"", L"The two lines in Saved Games\\DCS\\Config\\autoexec.cfg the hook needs (single player, hosting). REMOVE before you uninstall with OMM or OvGME", false},
     {L"Installation", L"install", L"logs", L"Logs", L"action", L"", 0, 0, 0, L"", L"", L"ILARTS.log, in %LOCALAPPDATA%\\ILARTS", false},
@@ -237,6 +238,9 @@ std::wstring BenchLastReport();  // bench.inc
 std::wstring BenchStatus();
 std::wstring BenchLamp(std::wstring* tip);
 void BenchLampClick();
+void UpdateStateJson(Json& s);  // update.inc
+void UpdateCommand(const std::wstring& what);
+void UpdateApplySettings();
 
 // A settings panel's info marker (the "i" beside its name plate): its tooltip.
 const wchar_t* SectionTip(const wchar_t* group) {
@@ -385,6 +389,7 @@ void ApplyLiveSettings() {
     StorageReadSettings();
     LiveApply();
     OutputsApply();
+    UpdateApplySettings();
 }
 
 // A new process of this program that waits for this one to end (settings that are read at start).
@@ -1623,6 +1628,7 @@ std::wstring ConsoleState() {
             s.close();
         }
     }
+    UpdateStateJson(s);  // the title bar's update indicator (update.inc)
     if (GetTickCount64() < g_flashUntil) s.str(L"flash", Upper(g_flash));
     // the knobs' ranges are the application's (contrast and gamma sweep logarithmically, as the sliders did)
     s.open(L"knobs");
@@ -2094,6 +2100,9 @@ void ConsoleCommand(const std::wstring& j) {
         OpenGuide();
     } else if (cmd == L"benchLamp") {  // the benchmark lamp after a run: its report, and the lamp goes out
         BenchLampClick();
+        ConsolePush();
+    } else if (cmd == L"update") {  // the update indicator's menu: install, notes, skip, cancel
+        UpdateCommand(JsonStr(j, L"what"));
         ConsolePush();
     } else if (cmd == L"settingsClose") {
         g_con.settingsOpen = false;

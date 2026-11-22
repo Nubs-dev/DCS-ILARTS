@@ -126,7 +126,10 @@ header>span:first-child{flex:none}
 header .wb{width:30px;height:26px;border:1px solid #2E343A;background:#1C2024;color:#C9D0D6;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
 header .wb.set{width:auto;gap:6px;padding:0 9px;font:600 9.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.12em}
 header .wb.help{font:600 13px 'IBM Plex Mono',Consolas,monospace}
-header .wb.bl[hidden]{display:none}
+header .wb.bl[hidden],header .wb.upd[hidden]{display:none}
+header .wb.upd{width:auto;padding:0 9px;font:600 9.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.12em;color:#8EE089;white-space:nowrap;min-width:92px;gap:6px}
+header .wb.upd svg{flex:none}
+header .wb.upd.amber{color:#F29447}
 header .wb.bl .lamp{display:block;width:14px;height:6px;border-radius:1.5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.45)}
 .info{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border:1px solid #444C54;border-radius:50%;background:#16191C;color:#AEB6BE;font:italic 600 10px 'IBM Plex Mono',Consolas,monospace;cursor:help;vertical-align:middle;flex:none}
 .sect.hl{border-color:#E7B04F;transition:border-color .2s}
@@ -410,6 +413,7 @@ select.fld option{background:#0A100B;color:#8EE089}
   <div class="sp" data-drag></div>
   <span class="lcd" data-t="status"></span>
   <div class="winbtns" style="display:flex;gap:4px">
+   <button class="wb upd" data-b="update" aria-label="Update" hidden><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v6M3.5 5L6 7.5 8.5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M1.5 8v2.5h9V8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg><span></span></button>
    <button class="wb bl" data-b="benchLamp" aria-label="Benchmark" hidden><i class="lamp"></i></button>
    <button class="wb help" data-b="guide" aria-label="User guide" title="User guide">?</button>
    <button class="wb set" data-b="settings" aria-label="Settings">${GEAR}SETTINGS</button>
@@ -843,6 +847,20 @@ ${row('FOV', 'fov', 0)}<div class="sep"></div>
         deckGroups(deck.length, hangar).map(x => typeof x === 'number' ? item(deck[x]) : x));
       this._pickList(anchor, items, i => this._cmd('preview', { slot, id: items[i].id }));
     }
+    // The update indicator's menu (state.update.menu: [{id, label, on}]): {cmd:'update', what: id}.
+    _updateMenu(anchor) {
+      const items = ((this._state || {}).update || {}).menu || [];
+      if (!items.length) return;
+      this._over.innerHTML = `<div class="back" data-close style="background:transparent"></div><div class="pop menu upd" role="menu">${items.map(it => `<button role="menuitem" data-um="${esc(it.id)}"${it.id === 'skip' ? ' class="warn"' : ''}${it.on ? '' : ' disabled'}>${esc(it.label)}</button>`).join('')}</div>`;
+      const r = anchor.getBoundingClientRect(), pop = this._over.querySelector('.pop');
+      Object.assign(pop.style, { left: Math.max(4, Math.min(innerWidth - pop.offsetWidth - 4, r.right - pop.offsetWidth)) + 'px', top: r.bottom + 4 + 'px' });
+      this._over.onclick = e => {
+        const b = e.target.closest('[data-um]');
+        if (b && b.disabled) return;
+        if (b) this._cmd('update', { what: b.dataset.um });
+        if (b || e.target.closest('[data-close]')) this._closeOver(false);
+      };
+    }
     // Right-click on a preset: save / rename / clear (a fixed preset - Night - offers none of them).
     _presetMenu(anchor) {
       const i = +anchor.dataset.preset, p = ((this._state || {}).presets || [])[i] || {}, can = !p.fixed;
@@ -1152,6 +1170,7 @@ ${row('FOV', 'fov', 0)}<div class="sep"></div>
       const b = e.target.closest('[data-b]');
       if (!b || b.getAttribute('aria-disabled') === 'true') return;
       const id = b.dataset.b;
+      if (id === 'update') return this._updateMenu(b);
       if (id === 'benchLamp') {  // armed or running: SETTINGS > Benchmark; after a run: its report, and the lamp goes out
         const st = (s.bench || {}).state;
         if (st === 'armed' || st === 'running') { this._showSect = 'Benchmark'; return this._cmd('settings'); }
@@ -1262,6 +1281,15 @@ ${row('FOV', 'fov', 0)}<div class="sep"></div>
           l.classList.toggle('blink', bs.state === 'running');
           bl.dataset.tip = bs.tip || 'Benchmark';
         }
+      }
+      {  // the update indicator: only while there is an update (or its download, or a failed install)
+        const ub = q('[data-b=update]'), up = s.update || null;
+        ub.hidden = !up;
+        if (up) {
+          this._set(ub.querySelector('span'), up.label || '');
+          ub.classList.toggle('amber', up.tone === 'amber');
+          ub.dataset.tip = up.tip || '';
+        } else if (this._over.querySelector('.pop.upd')) this._closeOver(false);
       }
       // the source keys: one per source - the deck positions as one DECK key (the view selector picks the position)
       const keyed = [];

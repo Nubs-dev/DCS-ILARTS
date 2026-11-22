@@ -308,10 +308,36 @@ local CLOUD_REBASE_PERIOD = 15
 -- on-screen text), 'observe' = installed but never changes anything, 'off' = not installed.
 local PLAT_ORIGIN = 'on'
 local PLAT_ORIGIN_AB_PERIOD = 15
+-- With the fix active (you more than 70 km from the carrier) an object seen both by the views at the carrier and by
+-- your own view was placed for one origin in all of them: your view then drew the carrier, full detail, next to
+-- your camera (2026-11-10 ghost carrier; 2026-11-19 "airport with runway lights" in the sky), or the PLAT lost
+-- the hull. true = such objects are placed per origin (origin_split.h); 'ab' = alternates split / no split every
+-- 15 s (PLATORIGIN test lines, on-screen text) to see the difference; false = DCS's single placement.
+local PLAT_ORIGIN_SPLIT = true
 -- Your own aircraft's canopy in the PLAT and the extra cameras. While you sit in the cockpit DCS hides your
 -- external model's canopy, frame and pilot (draw argument 114) in every view of the frame; true draws them in
 -- ILARTS's views as seen from outside (DCS's own views unchanged). Needs PLAT_ORIGIN. false = not installed.
 local OWN_CANOPY = true
+-- Stars in the PLAT and the extra cameras. DCS puts its stars 100 km out and ILARTS's views end at 80 km, so a
+-- zoomed-out camera showed them only toward its corners: a ring of short dashes around an empty centre (2026-11-19,
+-- night_sky.h). 'auto' = stars tied to a camera's zoom, as a longer lens shows fainter stars: none at 24 deg or
+-- wider, then the brightest first, fading in, the whole star field at 6 deg or narrower; never in the PLAT.
+-- 'hide' = no stars in ILARTS's views (a CCTV deck camera does not show them), 'full' = the whole star
+-- field (drawn at half the view's far plane, as DCS does for some views), 'stock' = as DCS draws them (the ring).
+-- 'auto' and 'full' draw each star as a square point (DCS's sprites came out 1.33x wide in a 4:3 camera picture).
+-- DCS's own views are unchanged. Needs PLAT_ORIGIN (it lists the views). 'off' = not installed.
+local CAMERA_STARS = 'auto'
+-- Rain and snow in the PLAT and the extra cameras. DCS stretches each drop along its motion relative to the camera,
+-- but works out the camera's motion only for your own view; the PLAT and the cameras drew with yours, so in flight
+-- the drops were long "warp speed" streaks at your aircraft's speed (2026-11-20, rain.h). 'auto' = each of ILARTS's
+-- views uses its own camera's motion (the ship's), 'still' = as for a camera at rest, 'hide' = no rain or snow in
+-- ILARTS's views, 'stock' = as DCS draws them, 'ab' = alternates auto / stock every 15 s (on-screen text, RAIN test
+-- lines) to compare. 'auto' and 'still' also draw the precipitation type of the carrier's temperature (DCS takes rain
+-- or snow from your own height: snow in the PLAT of a warm mission while you fly about 3 km up). More than 70 km away,
+-- 'auto', 'still' and 'hide' also read the rain density and the cloud shadows over the carrier, not over you.
+-- DCS's own views are unchanged. Needs PLAT_ORIGIN (it lists the views). 'off' = not installed.
+local CAMERA_RAIN = 'auto'
+local CAMERA_RAIN_AB_PERIOD = 15
 -- true: while on the F10 map, run DCS's world object search for the PLAT (experiment, see map_objects.h).
 -- Set to false if DCS crashes or the map misbehaves.
 local MAP_OBJECTS = true
@@ -1611,6 +1637,28 @@ local function benchStep(now)
     return false
 end
 
+-- The air temperature at sea level at the carrier (C), for the precipitation type in ILARTS's views (DCS splits rain
+-- and snow by the temperature at your own camera): DCS's own at the carrier (host / single player), else the
+-- mission's. nil when neither is known.
+local TEMP_QUERY = [==[
+local ok, res = pcall(function()
+  local t = atmosphere.getTemperatureAndPressure({x = px, y = 0, z = pz})
+  return string.format('%.2f', t - 273.15)
+end)
+return ok and res or ('error ' .. tostring(res))
+]==]
+local function carrierTemperature()
+    if not state.client and state.sel and state.sel.x and state.sel.z then
+        local code = string.format('local px, pz = %.1f, %.1f\n', state.sel.x, state.sel.z) .. TEMP_QUERY
+        local okq, r = pcall(net.dostring_in, 'server', code)
+        local t = okq and tonumber(r)
+        if t then return t end
+    end
+    local okm, m = pcall(API.getCurrentMission)
+    local w = okm and type(m) == 'table' and m.mission and m.mission.weather
+    return type(w) == 'table' and type(w.season) == 'table' and tonumber(w.season.temperature) or nil
+end
+
 local function step(now)
     if not compatGate(now) then return end
     if state.bench then
@@ -1766,6 +1814,17 @@ local function step(now)
             if state.originOk and PLAT_ORIGIN ~= 'observe' then diag.plat_origin('on') end
         end
         if state.originOk then
+            -- objects shared by the views at the carrier and your own view: placed per origin
+            local splitWant = PLAT_ORIGIN_SPLIT ~= false
+            if PLAT_ORIGIN_SPLIT == 'ab' then splitWant = math.floor(now / PLAT_ORIGIN_AB_PERIOD) % 2 == 0 end
+            if splitWant ~= state.splitOn then
+                state.splitOn = splitWant
+                diag.plat_origin(splitWant and 'split_on' or 'split_off')
+                if PLAT_ORIGIN_SPLIT == 'ab' then
+                    screenText('PLAT test: object split ' .. (splitWant and 'ON' or 'OFF'), PLAT_ORIGIN_AB_PERIOD - 1)
+                    diag.log('PLATORIGIN test: object split ' .. (splitWant and 'ON' or 'OFF'))
+                end
+            end
             if PLAT_ORIGIN == 'abc' then
                 -- far-view deck jitter test: A = current (per-view origin, camera smoothing), B = whole-frame
                 -- origin at the PLAT (the main view shakes), C = per-view origin without camera smoothing
@@ -1815,6 +1874,52 @@ local function step(now)
         if state.canopyOk and now >= (state.canopyNext or 0) then
             state.canopyNext = now + 5
             vlog('OWNCANOPY ' .. tostring(diag.own_canopy('stats')))
+        end
+    end
+    -- stars in the PLAT and the extra cameras (needs the PLAT origin hooks: they list the views)
+    if CAMERA_STARS ~= 'off' and state.originOk and diag.night_sky then
+        if state.starsOk == nil then
+            local r, why = diag.night_sky('install')
+            state.starsOk = r and true or false
+            diag.log('NIGHTSKY install: ' .. tostring(r and 'ok' or why))
+            if state.starsOk then diag.night_sky(CAMERA_STARS) end
+        end
+        if state.starsOk and now >= (state.starsNext or 0) then
+            state.starsNext = now + 60
+            diag.log('NIGHTSKY ' .. tostring(diag.night_sky('stats')))
+        end
+    end
+    -- rain and snow in the PLAT and the extra cameras (needs the PLAT origin hooks: they list the views)
+    if CAMERA_RAIN ~= 'off' and state.originOk and diag.rain then
+        if state.rainOk == nil then
+            local r, why = diag.rain('install')
+            state.rainOk = r and true or false
+            diag.log('RAIN install: ' .. tostring(r and 'ok' or why))
+            if state.rainOk and CAMERA_RAIN ~= 'ab' then diag.rain(CAMERA_RAIN) end
+        end
+        if state.rainOk and CAMERA_RAIN == 'ab' then
+            local want = math.floor(now / CAMERA_RAIN_AB_PERIOD) % 2 == 0 and 'auto' or 'stock'
+            if want ~= state.rainPhase then
+                state.rainPhase = want
+                diag.rain(want)
+                screenText('ILARTS rain test: ' .. (want == 'auto' and 'camera motion (fix ON)' or 'stock (fix OFF)'),
+                    CAMERA_RAIN_AB_PERIOD - 1)
+                diag.log('RAIN test: ' .. want)
+            end
+        end
+        if state.rainOk and now >= (state.rainTempNext or 0) then
+            state.rainTempNext = now + 60
+            local t = carrierTemperature()
+            t = t and math.floor(t * 10 + 0.5) / 10   -- whole tenths: the DLL logs each change
+            if t ~= state.rainTemp then
+                state.rainTemp = t
+                diag.rain('temperature', t)
+            end
+        end
+        if state.rainOk and now >= (state.rainNext or 0) then
+            state.rainNext = now + 60
+            local line = diag.rain('stats')
+            if line and line ~= '' then diag.log('RAIN ' .. tostring(line)) end
         end
     end
     if GLIDESLOPE_MEMSCAN and gsAngle and not state.memscanStart and API.getModelTime() > 30 then
@@ -1951,6 +2056,8 @@ function callbacks.onSimulationStop()
         if state.uiInstalled then pcall(diag.plat_ui, 'reset') end
         if state.cloudsOk then pcall(diag.clouds, 'remove') end
         if state.canopyOk then pcall(diag.own_canopy, 'remove') end
+        if state.starsOk then pcall(diag.night_sky, 'remove') end
+        if state.rainOk then pcall(diag.rain, 'remove') end
         if state.originOk then pcall(diag.plat_origin, 'remove') end
         if state.mapObjOk then pcall(diag.map_objects, 'remove') end
         if state.hullFixOk then pcall(diag.hull_refresh, 'remove') end
@@ -2412,13 +2519,14 @@ local function applyView(c)
     c.fov = v.fov or c.baseFov
 end
 
--- The last argument names what the camera shows (the view, else the camera): the DLL publishes the pose under that
--- name (Header::camPose) for the viewer's tuning panel.
+-- The last two arguments: what the camera shows (the view, else the camera; the DLL publishes the pose under that
+-- name, Header::camPose, for the viewer's tuning panel), and whether that is a hangar position (no rain or snow).
 local function sendCamera(i, c)
     applyView(c)
-    local shown = c.views and c.views[c.view] and c.views[c.view].name or c.name
+    local v = c.views and c.views[c.view]
+    local shown = v and v.name or c.name
     diag.extra_cam('set', i - 1, c.pos[1], c.pos[2], c.pos[3], c.look[1], c.look[2], c.look[3], c.fov or 60, c.aspect or 4 / 3,
-                   c.source or (29 + i), c.type or 0, tostring(shown))
+                   c.source or (29 + i), c.type or 0, tostring(shown), (v and v.hangar) and true or false)
 end
 
 -- Every camera's settings to the DLL (at the start, and after the tuning file changed).
@@ -2687,15 +2795,37 @@ local function carrierTick(now)
     end
     -- arriving at a station (or changing station) selects that station's carrier; the viewer's choice
     -- after that stands
+    -- The station is found from your own view (the main camera stands on the station's carrier). DCS's LSO
+    -- camera is only the fallback: with two carriers it was seen to report the other carrier on alternate
+    -- seconds after each selection, which flipped the selection every second (2026-11-20 log, CVN_71 / 72).
+    -- A station change must also hold for two ticks, and a station selection is not repeated within 10 s.
     if state.camKind == 'live' then
-        local cx, _, cz = camPos()
-        local c = cx and nearestCarrier(list, cx, cz, 2000)
+        local ex = rawget(_G, 'Export')
+        local okc, cam = pcall(function() return ex and ex.LoGetCameraPosition and ex.LoGetCameraPosition() end)
+        local c, src
+        if okc and cam and cam.p then
+            c, src = nearestCarrier(list, cam.p.x, cam.p.z, 2000), 'your camera'
+        else
+            local cx, _, cz = camPos()
+            c, src = cx and nearestCarrier(list, cx, cz, 2000), "DCS's LSO camera"
+        end
         if c and c.name ~= state.stationCarrier then
-            state.stationCarrier = c.name
-            if not state.sel or state.sel.name ~= c.name then selectCarrier(c, 'LSO station visited') end
+            if state.stationPending ~= c.name then
+                state.stationPending = c.name
+            elseif not state.sel or state.sel.name ~= c.name then
+                if now >= (state.stationHold or 0) then
+                    state.stationCarrier, state.stationPending = c.name, nil
+                    state.stationHold = now + 10
+                    selectCarrier(c, 'LSO station visited (' .. src .. ')')
+                end
+            else
+                state.stationCarrier, state.stationPending = c.name, nil
+            end
+        elseif c then
+            state.stationPending = nil
         end
     else
-        state.stationCarrier = nil
+        state.stationCarrier, state.stationPending = nil, nil
     end
     -- keep the selection current; pick a default when there is none (or it is gone)
     local selIdx = -1
@@ -3053,12 +3183,16 @@ function callbacks.onSimulationFrame()
     if not good then
         log.write('ILARTS', log.ERROR, 'step failed, disabling: ' .. tostring(err))
         if state.keepPlat then pcall(diag.keep_plat, false) end
+        if state.uiInstalled then pcall(diag.plat_ui, 'reset') end  -- as at mission stop: no recorded states left behind
         if state.cloudsOk then pcall(diag.clouds, 'remove') end
         if state.canopyOk then pcall(diag.own_canopy, 'remove') end
+        if state.starsOk then pcall(diag.night_sky, 'remove') end
+        if state.rainOk then pcall(diag.rain, 'remove') end
         if state.originOk then pcall(diag.plat_origin, 'remove') end
         if state.mapObjOk then pcall(diag.map_objects, 'remove') end
         if state.hullFixOk then pcall(diag.hull_refresh, 'remove') end
         if state.cams and diag.extra_cam then pcall(diag.extra_cam, 'remove') end
+        if state.smoothOn then pcall(diag.lso_camera, 'smooth_off') end
         if state.shipDraw then pcall(diag.lso_camera, 'ship_draw_off') end
         if state.bench then pcall(diag.bench, 'ended', 'ILARTS stopped (error)') end
         pcall(diag.share_stop)

@@ -91,8 +91,9 @@ window the controls get smaller rather than the pictures).
                out of the wires), the catapult nearest the camera, the active catapult, or catapult
                1-4 (the aircraft on it, through the launch). Moving the joystick pauses AUTO until
                AUTO or REST is pressed. A hangar camera has no AUTO or target: it stays where you
-               put it. FLIR (only with SETTINGS > Experimental > FLIR view on): that camera's picture
-               in DCS's infrared view - see EXPERIMENTAL below.
+               put it, and its picture never shows rain or snow. FLIR (only with SETTINGS >
+               Experimental > FLIR view on): that camera's picture in DCS's infrared view - see
+               EXPERIMENTAL below.
   - VTR REMOTE (rack): recording and replay. Its REC row shows every source the VTR records: each
     recording (automatic or manual) gives one file per source with REC on, named with the source at
     the end ("... TRAP PLAT.mp4", "... ISLAND.mp4"). Switching REC on for a camera switches it on.
@@ -299,6 +300,23 @@ virtual cameras are on and it went missing, and tells you whether your DCS versi
 found at the last mission; "not checked yet" until you start one).
 
 
+UPDATES
+-------
+Once a day ILARTS asks GitHub whether there is a newer release. When there is, a download icon and "1.1.0
+AVAILABLE" (the new version) appear in the title bar. Click it:
+  INSTALL            downloads the setup program, checks that it is the file published with the release,
+                     closes ILARTS, runs the setup with your earlier choices (folder, virtual cameras,
+                     shortcuts) and starts ILARTS again. Close DCS first: it holds ILARTS's files while it
+                     runs ("CLOSE DCS TO INSTALL").
+  RELEASE NOTES      opens the release's page on GitHub.
+  SKIP THIS VERSION  hides it until a newer version comes out.
+Installed with OMM, OvGME or by hand, the menu offers RELEASE PAGE instead of INSTALL: download the new
+zip there and install it the way you installed this one. "UPDATE FAILED": the tooltip says why; TRY
+AGAIN, or download it from the release page.
+To turn the check off: SETTINGS > Installation > Check for updates, or untick "Check for updates" in the
+setup program. Installing a new version keeps your choice.
+
+
 OBS, DISCORD AND OTHER PROGRAMS
 -------------------------------
 SETTINGS > Outputs:
@@ -346,13 +364,17 @@ ILARTS.ini next to ILARTS.exe (Mods\tech\ILARTS\bin); SETTINGS > OPEN FILE opens
             tiles: the composite's sources (a,b).
 [experimental] flir (1 = the FLIR key on the cameras' PTZ panels; costly, see EXPERIMENTAL).
 [benchmark] next_mission (1 = run the benchmark at the next mission start; set back to 0 when it starts).
+[update]    check (1 = check for updates once a day, the default; 0 = never), skip (a version you
+            skipped). ILARTS keeps the newest release it saw and when to check next here too.
 
 
 PRIVACY
 -------
 DCS ILARTS collects no data: no telemetry, no account. Everything it makes (recordings, stills,
-settings, the log) stays on your PC. The only network connection it makes is an RTMP stream you set up
-yourself, to the server you enter. Future versions may include an optional automatic check for updates.
+settings, the log) stays on your PC. It connects to the network for two things only: an RTMP stream you
+set up yourself, to the server you enter, and the check for updates (unless you switch it off): once a
+day it asks GitHub's public API for the newest release, sending nothing about you or your PC, and it
+downloads the setup program from GitHub when you click INSTALL.
 The log (%LOCALAPPDATA%\ILARTS\ILARTS.log) can show your Windows user name in file paths; it only
 leaves your PC if you attach it to a bug report. The window is drawn by Microsoft's WebView2 runtime,
 which follows your Windows diagnostic data settings.
@@ -367,9 +389,29 @@ Camera component > REMOVE if you installed the virtual cameras. Then disable it 
 Saved Games\DCS\Mods\tech\ILARTS and Saved Games\DCS\Scripts\Hooks\ILARTS-hook.lua.
 
 
+LIMITATIONS AND KNOWN ISSUES
+----------------------------
+Some parts of the picture DCS works out only for the main viewport (the view on your screen) at your
+player location (where you are in DCS: in an aircraft, at the LSO or Air Boss station, and so on). The
+PLAT and ILARTS's cameras are separate views and don't get them. So:
+- No sun shadows in the PLAT or the cameras, even with you at the LSO station (the island's shadow on
+  the deck, for example). DCS draws sun shadows for the main viewport only; DCS's own PLAT has none
+  either.
+- The deck's light: DCS works out reflections and sky light at your player location and uses them for
+  every view, so when you are far from the carrier the deck in the PLAT and the cameras can look darker
+  or flatter than when you are near it, most visibly in overcast and rain.
+- DCS keeps cloud data only for 200 km around your player location: with the carrier farther away, the
+  PLAT and the cameras can show different clouds and rain than the carrier really has.
+- Rain: in a warm mission the cameras' rain is lighter while your player location is at about
+  2.5-3.5 km (DCS turns part of it into snow for every view when it is near freezing there); under time
+  acceleration the streaks are longer.
+- Multiplayer clients: no LSO grades in file names, no automatic black box save after a crash or
+  ejection (DCS sends those events to the host only).
+
 PROBLEMS
 --------
-The user guide: Mods\tech\ILARTS\DCS-ILARTS-Guide.pdf (Start menu > "DCS ILARTS - User Guide").
+The user guide: Mods\tech\ILARTS\DCS-ILARTS-Guide.pdf (Start menu > "DCS ILARTS - User Guide"), and
+the same as a web page: Mods\tech\ILARTS\DCS-ILARTS-Guide.html.
 Report it at https://github.com/Nubs-dev/DCS-ILARTS/issues with your ILARTS version (SETTINGS >
 Installation > Version) and attach the log: %LOCALAPPDATA%\ILARTS\ILARTS.log
 (SETTINGS > Installation > Logs > OPEN opens its folder). For a frame rate problem, attach a benchmark

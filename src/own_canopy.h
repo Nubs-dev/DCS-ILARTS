@@ -15,8 +15,9 @@
 // handed differ) is taken from an unused slot for the second parse (slot + number of LODs, through the call
 // at NGModel+0x3DBE4), so DCS's own views keep their instances and see argument 114 unchanged. DCS's own
 // argument values are never written. The number of LODs is the model's LOD entry count (+0x5A0) minus its first
-// drawn entry (+0x5B0). An instance with 114 = 0 that uses a graphics instance seen with 114 set (a second
-// object of your aircraft sharing its LOD slots) is split the same way.
+// drawn entry (+0x5B0). Only objects with argument 114 set are split (your aircraft); every other parse and
+// every fetch of DCS's own is passed on unchanged (the fetch wrapper also checks DCS's slot index and binding
+// and logs anything unexpected; it never changes them).
 //
 // ILARTS's views are the extra views DCS sets up for picture sources (SceneRenderer view setup returning to
 // +0x24FC3) whose camera is the PLAT camera or an extra camera; plat_origin.cpp reports them per render graph
@@ -44,6 +45,8 @@ void* OwnCanopyTestParseWrap();
 void* OwnCanopyTestFetchWrap();
 void OwnCanopyTestStatsNow();
 void OwnCanopyTestSampleNow();   // the next near-camera parses write their OWNCANOPY near lines
+void OwnCanopyTestReset();       // what install does at the start of each mission
+void OwnCanopyTestInstalled(bool on);   // stats lines without patching NGModel
 #endif
 
 }  // namespace lsodiag

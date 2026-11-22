@@ -4,6 +4,10 @@
 ; carry, then runs "ILARTS.exe --repair" (hook, autoexec.cfg permissions, old hook removed). The virtual camera
 ; component is optional (Windows 11; asks for administrator rights for that step only). Running the installer
 ; again repairs; so does Start menu > DCS ILARTS - Repair.
+; "Check for updates" writes [update] check in ILARTS.ini (the setting of the same name); an existing ini keeps the
+; user's choice. ILARTS's update indicator (viewer/update.inc) starts this installer as
+;   DCS-ILARTS-Setup-<version>.exe /SILENT /SP- /ILARTSUPDATE=1
+; once ILARTS has closed: the earlier folder and tasks, a progress window, then ILARTS starts again.
 
 #ifndef Version
   #define Version "0.0.0"
@@ -48,6 +52,7 @@ SelectDirBrowseLabel=Usually Saved Games\DCS. Click Next to continue, or Browse 
 [Tasks]
 Name: "cameras"; Description: "Virtual cameras for Discord, Teams and OBS (Windows 11, administrator rights)"; Flags: unchecked; Check: IsWindows11
 Name: "desktopicon"; Description: "Desktop shortcut"; Flags: unchecked
+Name: "checkupdates"; Description: "Check for updates"
 
 [Files]
 Source: "{#Stage}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
@@ -62,6 +67,8 @@ Name: "{autodesktop}\DCS ILARTS"; Filename: "{#Bin}\ILARTS.exe"; WorkingDir: "{#
 Filename: "{#Bin}\ILARTS.exe"; Parameters: "--repair"; StatusMsg: "Checking the hook and DCS's permissions..."; Flags: runhidden waituntilterminated
 Filename: "{#Bin}\ILARTS.exe"; Parameters: "--install-cameras"; Verb: "runas"; StatusMsg: "Installing the virtual cameras..."; Flags: shellexec waituntilterminated runhidden; Tasks: cameras
 Filename: "{#Bin}\ILARTS.exe"; Description: "Start DCS ILARTS"; WorkingDir: "{#Bin}"; Flags: nowait postinstall skipifsilent
+; an update started from ILARTS (silent): ILARTS comes back by itself
+Filename: "{#Bin}\ILARTS.exe"; WorkingDir: "{#Bin}"; Flags: nowait; Check: FromUpdater
 
 [UninstallRun]
 ; autoexec.cfg: the block REPAIR added comes out again (anything else in the file stays; the backup goes once the
@@ -102,4 +109,58 @@ begin
   Result := True;
   while Result and ((FindWindowByWindowName('DCS') <> 0) or (FindWindowByWindowName('Digital Combat Simulator') <> 0)) do
     Result := MsgBox('DCS is running. Close DCS, then click OK to continue (Cancel quits).', mbInformation, MB_OKCANCEL) = IDOK;
+end;
+
+// Started by ILARTS's update indicator (/ILARTSUPDATE=1).
+function FromUpdater: Boolean;
+begin
+  Result := ExpandConstant('{param:ILARTSUPDATE|0}') = '1';
+end;
+
+// "Check for updates" and [update] check in ILARTS.ini (beside ILARTS.exe; the installer never ships the ini, so an
+// upgrade keeps the file). The checkbox starts from the ini's value when there is one (Setup goes through the tasks
+// page in a silent install too), so an upgrade keeps the user's current choice, and the task's state is written after
+// installing. /TASKS or /MERGETASKS on the command line win over the ini. Should the page never come up, an existing
+// value stays.
+var
+  TasksSeeded: Boolean;
+
+function IniFile: String;
+begin
+  Result := ExpandConstant('{#Bin}\ILARTS.ini');
+end;
+
+function TasksOnCommandLine: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if (Pos('/TASKS=', Uppercase(ParamStr(I))) = 1) or (Pos('/MERGETASKS=', Uppercase(ParamStr(I))) = 1) then
+      Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  V: String;
+begin
+  if (CurPageID = wpSelectTasks) and not TasksSeeded and not TasksOnCommandLine then
+  begin
+    TasksSeeded := True;
+    V := GetIniString('update', 'check', '', IniFile);
+    if V = '0' then WizardSelectTasks('!checkupdates')
+    else if V <> '' then WizardSelectTasks('checkupdates');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Value: String;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  if WizardIsTaskSelected('checkupdates') then Value := '1' else Value := '0';
+  Log('Check for updates: task ' + Value + ', seeded from the ini ' + IntToStr(Ord(TasksSeeded)) + ', on the command line ' +
+    IntToStr(Ord(TasksOnCommandLine)) + ', ini before "' + GetIniString('update', 'check', '', IniFile) + '"');
+  if TasksSeeded or TasksOnCommandLine or (GetIniString('update', 'check', '', IniFile) = '') then
+    SetIniString('update', 'check', Value, IniFile);
 end;

@@ -25,7 +25,8 @@
 //
 // PLAT processing (feeds 1 and 2 share it):
 //   Pipeline - rebuilt from hdrBufferMFD32 (clean scene-linear HDR camera image):
-//       k   = DCS's exposure, measured live (median of -ln(1-lso)/hdr over mid-tones)
+//       k   = DCS's exposure, measured live (median of -ln(1-lso)/hdr over mid-tones that agree with their
+//             neighbours, i.e. not DCS's symbology; held while too few pixels qualify)
 //       cam = levels(1 - exp(-k * 2^stops * lum(hdr)))
 //       sym = DCS symbology mask from LSOFRAME vs the predicted camera value
 //       out = lerp(cam, lso, sym)
@@ -58,6 +59,11 @@
 #include <mfvirtualcamera.h>  // virtual cameras (outputs.inc; the API itself is looked up at run time: Windows 11)
 #include <sddl.h>
 #include <tlhelp32.h>
+#include <winhttp.h>   // updates (update.inc)
+#include <bcrypt.h>    // SHA-256 of a downloaded installer
+#include <wincrypt.h>
+#include <wintrust.h>  // its Authenticode signature
+#include <softpub.h>
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +78,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <thread>
@@ -151,41 +158,62 @@ float levels(float x) {
 //   Day   (setNightMode(false), black ink - capture 2026-11-09 06:14:25): lso = pred*(1-c)
 //   Night (setNightMode(true), bright ink): lso = pred*(1-c) + ink*c, ink ~ 1; also gated on absolute
 //         brightness (robust when the in-DCS LSO_PLAT shader has already lifted LSOFRAME's mid-tones).
-// A small dead zone absorbs prediction error. dark = 1 for black ink.
+// A pixel is ink only when no exposure within KTOL of kDcs explains it: DCS's tone curve departs from
+// 1 - exp(-k*h) by about +-15% in k across one frame's tones (docs/FINDINGS.md), and kDcs is an estimate. Beyond
+// that a small dead zone absorbs the rest. dark = 1 for black ink.
+static const float KTOL = 1.3;
+// DCS's own in-shader adjustment (LsoAdjust), so the rebuilt camera image looks like DCS's PLAT at 0 EV.
+float adjustCore(float c) {
+    float t = pow(saturate(c), 2.2);
+    t = 1 - pow(saturate(1 - t), exp2(dcsAdj.x));
+    c = pow(pow(t, 1 / 2.2), 1 / dcsAdj.y);
+    return saturate((c - 0.5) * dcsAdj.z + 0.5 + dcsAdj.w);
+}
+float adjustDcs(float c) { return dcsAdj2.y < 0.5 ? c : adjustCore(c); }
 // Undoes the in-DCS PLAT adjustment (deploy/shaders LSO_PLAT.hlsl, LsoAdjust) so LSOFRAME can be compared
-// with DCS's stock tone curve; identity when that shader is not installed / disabled.
+// with DCS's stock tone curve; identity when that shader is not installed / disabled. The shader leaves pixels
+// at or above the keep level alone, but it lifts bright scene pixels to there too (+1 stop: stock 0.85 -> 0.97).
+// Below adjust(keep) a value can be either; the scene's far outnumber DCS's white text (at 1), so they are undone.
 float unadjust(float c) {
-    if (dcsAdj2.y < 0.5 || c >= dcsAdj2.x) return c;
+    if (dcsAdj2.y < 0.5 || c >= max(dcsAdj2.x, adjustCore(dcsAdj2.x))) return c;
     c = (c - 0.5 - dcsAdj.w) / max(dcsAdj.z, 1e-3) + 0.5;
     c = pow(saturate(c), dcsAdj.y);
     float t = pow(c, 2.2);
     t = 1 - pow(saturate(1 - t), exp2(-dcsAdj.x));
     return pow(t, 1 / 2.2);
 }
-float symCover(float lso, float h, out float dark) {
+// DCS's camera value of HDR luminance h: x with exposure kDcs / KTOL, y kDcs, z kDcs * KTOL.
+float3 predOf(float h) {
+    float x = kDcs * h;
+    return 1 - exp(-float3(x / KTOL, x, x * KTOL));
+}
+// The same where LSOFRAME is sampled at uv: each texel tone-mapped, then interpolated as LSOFRAME's are. Tone-mapping
+// the interpolated HDR value instead reads too bright on every high-contrast edge (the curve is concave), and the
+// mask took those edges for black ink: black outlines along the deck edge, the cables, aircraft against a bright sky.
+float3 predAt(float2 uv) {
+    float w, hh;
+    texHdr.GetDimensions(w, hh);
+    float2 p = uv * float2(w, hh) - 0.5;
+    float2 f = frac(p);
+    int2 i = int2(floor(p)), mx = int2(w, hh) - 1;
+    float3 a = predOf(dot(texHdr.Load(int3(clamp(i, 0, mx), 0)).rgb, LUM));
+    float3 b = predOf(dot(texHdr.Load(int3(clamp(i + int2(1, 0), 0, mx), 0)).rgb, LUM));
+    float3 c = predOf(dot(texHdr.Load(int3(clamp(i + int2(0, 1), 0, mx), 0)).rgb, LUM));
+    float3 d = predOf(dot(texHdr.Load(int3(clamp(i + int2(1, 1), 0, mx), 0)).rgb, LUM));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+float symCover(float lso, float3 pred, out float dark) {
     lso = unadjust(lso);
-    float pred = 1 - exp(-kDcs * h);
-    float d = lso - pred;
     const float dead = 0.05;
     dark = 0;
-    if (d > 0.08) return saturate((d - 0.08) / max(1 - pred - 0.08, 0.05)) * smoothstep(0.5, 0.8, lso);
-    if (d < -dead && pred > 0.08) {
+    float d = lso - pred.z;
+    if (d > 0.08) return saturate((d - 0.08) / max(1 - pred.z - 0.08, 0.05)) * smoothstep(0.5, 0.8, lso);
+    d = pred.x - lso;
+    if (d > dead && pred.y > 0.08) {
         dark = 1;
-        return saturate((-d - dead) / max(pred - dead, 0.03));
+        return saturate((d - dead) / max(pred.x - dead, 0.03));
     }
     return 0;
-}
-float symMask(float lso, float h) {
-    float dark;
-    return symCover(lso, h, dark);
-}
-// DCS's own in-shader adjustment (LsoAdjust), so the rebuilt camera image looks like DCS's PLAT at 0 EV.
-float adjustDcs(float c) {
-    if (dcsAdj2.y < 0.5) return c;
-    float t = pow(saturate(c), 2.2);
-    t = 1 - pow(saturate(1 - t), exp2(dcsAdj.x));
-    c = pow(pow(t, 1 / 2.2), 1 / dcsAdj.y);
-    return saturate((c - 0.5) * dcsAdj.z + 0.5 + dcsAdj.w);
 }
 float camera(float h) { return adjustDcs(1 - exp(-kDcs * expMul * h)); }
 
@@ -257,7 +285,6 @@ float platValue(float2 uv) {
     // offset toward the centre with the CCTV look on). Like text in a real CCTV signal, it bends with the picture.
     float lso = noLdr ? 0 : dot(texLso.Sample(smp, cuv).rgb, LUM);
     if (proc > 1.5) {
-        float h = dot(texHdr.Sample(smp, cuv).rgb, LUM);
         float cv = camAA(cuv, 0);
         if (cctv.x > 0) {   // limited bandwidth: a little softer along the scan lines
             float w, hh;
@@ -266,7 +293,7 @@ float platValue(float2 uv) {
             cv = 0.5 * cv + 0.25 * (camTap(cuv - dx, 0) + camTap(cuv + dx, 0));
         }
         float dark = 0;
-        float c = noLdr ? 0 : symCover(lso, h, dark) * symOn;
+        float c = noLdr || symOn < 0.5 ? 0 : symCover(lso, predAt(cuv), dark);
         float cam = cctvSignal(levels(cv), uv);
         // black ink: composite black with coverage c over the adjusted camera image (exact for edges);
         // bright ink: keep DCS's own ink colour
@@ -310,40 +337,62 @@ float4 ps(VSOut i) : SV_Target {
     return float4(texMain.Sample(smp, i.uv).rgb, 1);
 }
 
-// Histogram of the camera image (pre-levels), symbology excluded. Runs over LSOFRAME's pixels.
+// Histogram of the camera image (pre-levels). Runs over LSOFRAME's pixels. The pipeline's camera image is rebuilt
+// from the HDR image, which has no symbology, so every pixel counts: leaving out what the symbology mask flagged let a
+// wrong mask (a wrong kDcs flags most of a bright sky) drop the highlights and AUTO levels washed the picture out.
+// Levels alone works on LSOFRAME itself: its white text (>= 0.9) is left out.
 RWBuffer<uint> hist : register(u0);
 [numthreads(16, 16, 1)]
 void csCam(uint3 id : SV_DispatchThreadID) {
     uint w, h;
     texLso.GetDimensions(w, h);
     if (id.x >= w || id.y >= h) return;
-    bool noLdr = extra.w > 0.5;   // texLso is then the HDR image itself (for its size)
-    float lso = noLdr ? 0 : dot(texLso.Load(int3(id.xy, 0)).rgb, LUM);
     float2 uv = (id.xy + 0.5) / float2(w, h);
     float v;
     if (proc > 1.5) {
-        float hh = dot(texHdr.SampleLevel(smp, uv, 0).rgb, LUM);
-        if (!noLdr && symMask(lso, hh) > 0.5) return;
-        v = camera(hh);
+        v = camera(dot(texHdr.SampleLevel(smp, uv, 0).rgb, LUM));
     } else {
-        if (lso >= 0.9) return;
-        v = lso;
+        v = dot(texLso.Load(int3(id.xy, 0)).rgb, LUM);
+        if (v >= 0.9) return;
     }
     InterlockedAdd(hist[min(BINS - 1, (uint)(sqrt(saturate(v)) * BINS))], 1);
 }
 
 // Histogram of log2(k) = log2(-ln(1-lso)/hdr) over mid-tone pixels: DCS's exposure.
+float hdrTexel(int2 p, float2 size) { return dot(texHdr.SampleLevel(smp, (p + 0.5) / size, 0).rgb, LUM); }
 [numthreads(16, 16, 1)]
 void csK(uint3 id : SV_DispatchThreadID) {
     uint w, h;
     texLso.GetDimensions(w, h);
     if (id.x >= w || id.y >= h) return;
+    const float2 size = float2(w, h);
+    const int2 p = int2(id.xy);
+    float hh = hdrTexel(p, size);
     // Without an LDR picture: the exposure that puts each pixel at 0.45; the median then exposes the lit
     // part of the picture for a middle grey, as a camera's automatic exposure would.
-    float lso = extra.w > 0.5 ? 0.45 : unadjust(dot(texLso.Load(int3(id.xy, 0)).rgb, LUM));
-    float hh = dot(texHdr.SampleLevel(smp, (id.xy + 0.5) / float2(w, h), 0).rgb, LUM);
+    float lso = extra.w > 0.5 ? 0.45 : unadjust(dot(texLso.Load(int3(p, 0)).rgb, LUM));
     if (lso < 0.08 || lso > 0.7 || hh < 1e-5) return;
-    float t = saturate((log2(-log(1 - lso) / hh) - KMIN) / (KMAX - KMIN));
+    float k = -log(1 - lso) / hh;
+    if (extra.w < 0.5) {
+        // DCS tone-maps the whole frame with one exposure, so a scene pixel and its neighbours agree on k; the
+        // symbology drawn over the scene (text, its dark halo, anti-aliased edges) does not. Without this test a
+        // bright picture (sunrise: sky saturated, sea and deck nearly black) left mostly halo pixels in the
+        // mid-tones, whose k reads far too low.
+        const int2 nb[4] = {int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3)};
+        [unroll] for (int i = 0; i < 4; ++i) {
+            int2 q = p + nb[i];
+            if (any(q < 0) || q.x >= (int)w || q.y >= (int)h) continue;
+            float lq = unadjust(dot(texLso.Load(int3(q, 0)).rgb, LUM));
+            float hq = hdrTexel(q, size);
+            float xq = k * hq;   // q's tone-mapping input with p's exposure
+            bool agree;
+            if (lq < 0.03) agree = xq < 0.12;
+            else if (lq > 0.97) agree = xq > 2.0;
+            else agree = hq >= 1e-5 && abs(log2(-log(1 - lq) / xq)) <= 0.6;
+            if (!agree) return;
+        }
+    }
+    float t = saturate((log2(k) - KMIN) / (KMAX - KMIN));
     InterlockedAdd(hist[min(BINS - 1, (uint)(t * BINS))], 1);
 }
 )";
@@ -428,6 +477,8 @@ struct Analysis {
     bool haveAutoTarget = false;
     float kDcs = 100.0f, kTarget = 100.0f;
     bool haveK = false;
+    bool noLdr = false;  // the last picture measured had only its HDR image (exposure for a middle grey)
+    UINT pixels = 0;     // its size (width x height)
     double lastT = 0;
 };
 // Cameras as sources (logical cameras): ISLAND and each deck position. Each has its own levels (Analysis).
@@ -1485,7 +1536,12 @@ float BinToSqrtValue(double bin) {
 void ConsumeCamHistogram(Analysis& a, const UINT* h) {
     unsigned long long total = 0;
     for (UINT i = 0; i < kBins; ++i) total += h[i];
-    if (total <= 100) return;
+    if (total <= 100) {  // nothing to measure (Levels: a picture all white): head back to the full range, not stay put
+        a.targetBlack = 0.0f;
+        a.targetWhite = 1.0f;
+        a.haveAutoTarget = true;
+        return;
+    }
     const unsigned long long lo = total * 5 / 1000, hi = total * 990 / 1000;
     unsigned long long acc = 0;
     int loBin = -1, hiBin = kBins - 1;
@@ -1508,10 +1564,13 @@ void ConsumeCamHistogram(Analysis& a, const UINT* h) {
     a.haveAutoTarget = true;
 }
 
+// DCS's exposure: the median over the mid-tone pixels csK kept. With too few of them (night, a picture of only
+// highlights and shadows) the last value stays: a few hundred pixels at the symbology's edges are no measurement.
 void ConsumeKHistogram(Analysis& a, const UINT* h) {
     unsigned long long total = 0;
     for (UINT i = 0; i < kBins; ++i) total += h[i];
-    if (total < 200) return;
+    const unsigned long long need = a.noLdr ? 200ull : std::max(200ull, a.pixels / 200ull);
+    if (total < need) return;
     unsigned long long acc = 0;
     for (UINT i = 0; i < kBins; ++i) {
         acc += h[i];
@@ -1953,6 +2012,8 @@ void Update() {
         if (x.lso->fresh || (x.hdr && x.hdr->fresh)) {
             WriteParams(x);
             BindSources(x);
+            a.noLdr = x.noLdr;
+            a.pixels = x.lso->w * x.lso->h;
             if (x.proc == Proc::Pipeline) a.histK.dispatch(app.ctx, app.csK, x.lso->w, x.lso->h);
             if (SetFor(x.an).autoLevels) a.histCam.dispatch(app.ctx, app.csCam, x.lso->w, x.lso->h);
             UnbindSources();
@@ -3176,7 +3237,67 @@ void RecStartManual() {
 // manual recording plus DCS's mission clock when the hook gives it: "ILARTS 2026-11-16 14-03-22 PLAT DCS 09-30-12.png".
 std::set<std::wstring> g_stillPaths;  // handed out (a file may not be on disk yet)
 bool StillReady() { return !TakeChannels().empty(); }  // a source with REC on has a picture
+// [viewer] debug=1: a still also saves the PLAT's two pictures as DCS shares them, LSOFRAME-<time>.dds and
+// hdrBufferMFD32-<time>.dds (share_selftest --serve plays them back), and PLAT-<time>.txt with the exposure and
+// levels measured on them, so a picture the pipeline gets wrong can be reproduced without DCS.
+void DumpPlatSources() {
+    const std::wstring dir = StillsFolder(), stamp = Stamp();
+    for (const char* name : {"LSOFRAME", "hdrBufferMFD32"}) {
+        Target* t = FindTarget(name);
+        if (!t || !t->local) continue;
+        D3D11_TEXTURE2D_DESC d{};
+        t->local->GetDesc(&d);
+        UINT bpp = 0;
+        switch (d.Format) {
+            case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_UNORM:
+            case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: case DXGI_FORMAT_R11G11B10_FLOAT: case DXGI_FORMAT_R10G10B10A2_UNORM:
+                bpp = 4; break;
+            case DXGI_FORMAT_R16G16B16A16_FLOAT: bpp = 8; break;
+            case DXGI_FORMAT_R32G32B32A32_FLOAT: bpp = 16; break;
+            default: continue;
+        }
+        d.Usage = D3D11_USAGE_STAGING;
+        d.BindFlags = 0;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        d.MiscFlags = 0;
+        ID3D11Texture2D* s = nullptr;
+        if (FAILED(app.dev->CreateTexture2D(&d, nullptr, &s))) continue;
+        app.ctx->CopyResource(s, t->local);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        FILE* f = nullptr;
+        const std::wstring path = dir + L"\\" + Utf8W(name) + L"-" + stamp + L".dds";
+        if (SUCCEEDED(app.ctx->Map(s, 0, D3D11_MAP_READ, 0, &m))) {
+            if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f) {
+                uint32_t hdr[37] = {0x20534444u, 124, 0x100F, d.Height, d.Width, d.Width * bpp, 0, 1};  // "DDS ", DX10 header
+                hdr[19] = 32;
+                hdr[20] = 0x4;
+                hdr[21] = 0x30315844u;  // 'DX10'
+                hdr[27] = 0x1000;
+                hdr[32] = d.Format;
+                hdr[33] = 3;  // 2D
+                hdr[35] = 1;
+                fwrite(hdr, sizeof(hdr), 1, f);
+                for (UINT y = 0; y < d.Height; ++y) fwrite(static_cast<const uint8_t*>(m.pData) + y * m.RowPitch, 1, d.Width * bpp, f);
+                fclose(f);
+            }
+            app.ctx->Unmap(s, 0);
+        }
+        s->Release();
+    }
+    const Analysis& a = app.an[0];
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, (dir + L"\\PLAT-" + stamp + L".txt").c_str(), L"w") == 0 && f) {
+        const Settings& S = SetFor(0);
+        fprintf(f, "k %.2f target %.2f measured %d\nauto_levels %d levels %.4f..%.4f target %.4f..%.4f\n", a.kDcs, a.kTarget, a.haveK ? 1 : 0,
+                S.autoLevels ? 1 : 0, a.autoBlack, a.autoWhite, a.targetBlack, a.targetWhite);
+        fprintf(f, "brightness %.3f contrast %.3f gamma %.3f stops %.3f\n", S.brightness, S.contrast, S.gamma, S.stops);
+        fprintf(f, "dcs_adjust %d stops %.3f gamma %.3f contrast %.3f brightness %.3f keep %.3f\nnight %d\n", app.dcsAdjOn ? 1 : 0,
+                app.dcsAdj[0], app.dcsAdj[1], app.dcsAdj[2], app.dcsAdj[3], app.dcsKeep, HeaderValid() && app.header->sym.night ? 1 : 0);
+        fclose(f);
+    }
+}
 void StillTake() {
+    if (app.debug) DumpPlatSources();
     if (!g_rec.ok) {
         RecStatus(L"Video unavailable on this PC");
         return;
@@ -3988,6 +4109,7 @@ struct TestDrive {
     size_t scriptAt = 0;
     bool offscreen = false, logCommands = false;
     bool noWebView2 = false;  // --test-no-webview2: behave as if the WebView2 runtime were not installed
+    double analysisS = 1.0;   // --test-analysis S: the PLAT's exposure and levels logged every S seconds
 } g_test;
 void ConsoleTestTick(double t);
 
@@ -4075,6 +4197,15 @@ bool TestTick() {
     }
     ConsoleTestTick(now - g_test.start);
     if (app.presentedWithImage == 0) return false;
+    static double nextAnalysis = 0;  // the PLAT's exposure and AUTO levels, once a second (--test-analysis)
+    if (now >= nextAnalysis) {
+        nextAnalysis = now + g_test.analysisS;
+        const Analysis& a = app.an[0];
+        wchar_t b[160];
+        swprintf_s(b, L"analysis PLAT k %.1f target %.1f measured %d levels %.3f..%.3f target %.3f..%.3f", a.kDcs, a.kTarget,
+                   a.haveK ? 1 : 0, a.autoBlack, a.autoWhite, a.targetBlack, a.targetWhite);
+        TestLog(b);
+    }
     while (g_test.keyAt < g_test.keys.size() && now - g_test.start >= g_test.keys[g_test.keyAt].first) {
         const wchar_t k = g_test.keys[g_test.keyAt++].second;
         TestLog(std::wstring(L"key ") + k + L" (status before: " + g_rec.status + L")");
@@ -4289,6 +4420,7 @@ void HandleKey(WPARAM w) {
 #include "console.inc"
 #include "bench.inc"
 #include "repair.inc"
+#include "update.inc"  // updates from the GitHub releases
 
 // The window and taskbar icon contrast with Windows' theme: the light artwork on a dark taskbar, the dark one on a
 // light taskbar (ILARTS.rc: 1 light, 2 dark). Again on a theme change and on a move to a monitor with another DPI.
@@ -4423,6 +4555,7 @@ void ParseArgs() {
             }
         }
         else if (a == L"--test-log" && i + 1 < argc) g_test.log = argv[++i];
+        else if (a == L"--test-analysis" && i + 1 < argc) g_test.analysisS = std::clamp(_wtof(argv[++i]), 0.02, 60.0);
         else if (a == L"--test-storage" && i + 1 < argc) g_testStorage = argv[++i];
         else if (a == L"--test-bench-report" && i + 1 < argc) g_testBenchReport = argv[++i];
         else if (a == L"--test-bench-seconds" && i + 1 < argc) {  // measure S s per stage, settle in proportion (20 s: as usual)
@@ -4431,6 +4564,12 @@ void ParseArgs() {
         }
         else if (a == L"--test-saved-games" && i + 1 < argc) g_testSavedGames = argv[++i];  // stands in for Saved Games\DCS
         else if (a == L"--test-no-webview2") g_test.noWebView2 = true;
+        else if (a == L"--test-update-feed" && i + 1 < argc) g_upd.testFeed = argv[++i];  // update.inc: a file or loopback URL for the API
+        else if (a == L"--test-update-version" && i + 1 < argc) g_upd.testVersion = argv[++i];  // the running version, for updates
+        else if (a == L"--test-update-mode" && i + 1 < argc) g_upd.testMode = argv[++i];  // installer | zip
+        else if (a == L"--test-update-dcs" && i + 1 < argc) g_upd.testDcs = _wtoi(argv[++i]);  // DCS taken as running (1) or not (0)
+        else if (a == L"--test-update-signer" && i + 1 < argc) g_upd.testSigner = argv[++i];  // ILARTS.exe taken as signed by this name
+        else if (a == L"--test-update-selftest") g_upd.testSelf = L"1";
         else if (a == L"--wait-pid" && i + 1 < argc) g_waitPid = static_cast<DWORD>(_wtoi(argv[++i]));
         else if (a == L"--test-offscreen") g_test.offscreen = true;
         else if (a == L"--test-commands") g_test.logCommands = true;
@@ -4495,6 +4634,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     ParseArgs();
     if (!g_testStorage.empty()) return StorageSelfTest(g_testStorage, g_test.log);
     if (!g_testBenchReport.empty()) return BenchSelfTest(g_testBenchReport, g_test.log);
+    if (!g_upd.testSelf.empty()) return UpdateSelfTest(g_test.log);
+    UpdateInit();  // updates: the setting, the last release seen, the schedule
     OutputsApply();
     // The console is the interface (the classic window was removed 2026-11-18). Without the WebView2 runtime ILARTS
     // cannot open: it says so and offers the download page.
@@ -4606,6 +4747,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
         Update();
         RecTick();
         BenchTick();
+        UpdateTick();
         ConsoleRender();
         if (TestTick()) break;
         if (g_con.failed && !g_con.failNoticed) {  // WebView2 gave up: say so, close cleanly (files finished)
@@ -4622,6 +4764,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
         if (!app.swap) MsgWaitForMultipleObjects(0, nullptr, FALSE, 15, QS_ALLINPUT);  // the page stays responsive
     }
     ConsoleShutdown();
+    UpdateShutdown();
     if (BenchActive()) BenchFinish(L"ILARTS was closed", false);  // what was measured, and the hook told
     else if (BenchReportDue()) BenchReport();                   // a finished run still waiting for its encoders
     RecStopAll();
@@ -4639,5 +4782,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     if (mf) MFShutdown();
     if (app.header) UnmapViewOfFile(app.header);
     if (app.mapping) CloseHandle(app.mapping);
+    UpdateLaunch();  // INSTALL: the verified installer, now that ILARTS's files are let go
     return 0;
 }

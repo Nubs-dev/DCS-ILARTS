@@ -8,6 +8,13 @@
 //
 // All calls into that state are made on the thread that was seen using it (DCS's main thread), from
 // the GUI hook, i.e. never while that state is executing.
+//
+// Safety of the search (2026-11-19 audit): the recorded states are main threads (a coroutine is folded
+// into its state's main thread), each with the time of its latest widget call. An unknown state is
+// probed with lua_cpcall at most once per sighting and only within 2 s of a widget call, and never when
+// suspended. Before, every recorded state was probed once a second for as long as the PLAT UI state had
+// not been found, i.e. for the whole mission when you never opened the LSO view - including states closed
+// since and coroutines collected since, whose memory had been freed.
 #pragma once
 
 #include <string>
@@ -36,5 +43,14 @@ std::string PlatUiCallLog();
 // FLOLS.lua (2D meatball pilot aid, its own private state): installs (once) a call-through recorder on
 // update(meatball, datum, cutlights) and returns "update=<calls>(meatball,datum,cutlights)" (last call).
 std::string PlatUiFlolsLog();
+
+#ifdef PLAT_UI_TEST
+bool PlatUiTestResolve();                              // lua.dll's API (lua.dll must be loaded)
+bool PlatUiTestLayoutOk();                             // lua.dll's code matches the layout plat_ui reads
+void PlatUiTestRecord(void* L);                        // what the import hook records for a widget call from L
+void PlatUiTestSetClock(unsigned long long (*now)());  // replaces GetTickCount64 (null: back to it)
+long long PlatUiTestProbes();                          // lua_cpcall probes run so far
+void* PlatUiTestRecorded(int i);                       // the i-th recorded state, or null
+#endif
 
 }  // namespace lsodiag

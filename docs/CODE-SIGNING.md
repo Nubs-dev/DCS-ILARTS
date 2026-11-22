@@ -25,6 +25,8 @@ Every signing request is approved by hand.
 ## Privacy
 
 This program will not transfer any information to other networked systems unless specifically requested by the
-user or the person installing or operating it. The only network connection DCS ILARTS makes is the RTMP stream
-the user sets up, to the server address the user enters. Future versions may include an optional automatic
-check for updates.
+user or the person installing or operating it. DCS ILARTS makes two network connections: the RTMP stream the user
+sets up, to the server address the user enters, and an update check the user can switch off (in the program's
+settings or the installer): once a day it asks GitHub's public API for the newest release of this repository,
+unauthenticated and with a generic user agent, and it downloads the installer from GitHub only when the user clicks
+INSTALL.

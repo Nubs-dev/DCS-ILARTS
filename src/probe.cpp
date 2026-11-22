@@ -31,10 +31,13 @@
 #include "clouds_probe.h"
 #include "map_objects.h"
 #include "ship_trace.h"
+#include "origin_split.h"
 #include "plat_origin.h"
 #include "memscan.h"
 #include "hullscan.h"
 #include "hull_refresh.h"
+#include "night_sky.h"
+#include "rain.h"
 #include "own_canopy.h"
 #include "plat_cam.h"
 #include "extra_cams.h"
@@ -315,6 +318,7 @@ int L_share_status(lua_State* L) {
 int L_share_stop(lua_State*) {
     LogScope log;
     ShareStop();
+    MfdClearRequests();  // a request must not carry over into the next mission (its aircraft may use that source)
     return 0;
 }
 
@@ -467,6 +471,8 @@ int L_extra_cam(lua_State* L) {
         const int index = static_cast<int>(lua.tonumber(L, 2));
         ExtraCamsConfigure(index, pos, look, lua.tonumber(L, 9), lua.tonumber(L, 10), static_cast<int>(lua.tonumber(L, 11)),
                            static_cast<int>(lua.tonumber(L, 12)));
+        // 14: true = a hangar deck position (no rain or snow in its picture)
+        ExtraCamsSetHangar(index, lua.gettop(L) >= 14 && lua.toboolean(L, 14) != 0);
         // 13: what it shows (the view's or camera's name), for Header::camPose (the viewer's tuning panel)
         const char* shown = lua.gettop(L) >= 13 ? lua.tolstring(L, 13, nullptr) : nullptr;
         if (shown && index >= 0 && index < lsoshare::kMaxCameras) {
@@ -739,6 +745,68 @@ int L_own_canopy(lua_State* L) {
     lua.pushstring(L, OwnCanopyStats().c_str());
     return 1;
 }
+// ILARTS.night_sky(action)   (stars in ILARTS's views; see night_sky.h)
+//   'install' -> true | nil, reason    'auto' / 'hide' / 'full' / 'stock'    'stats' -> summary    'remove'
+int L_night_sky(lua_State* L) {
+    LogScope log;
+    const char* a = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
+    const std::string act = a ? a : "stats";
+    if (act == "install") {
+        std::string why = NightSkyInstall();
+        if (why.empty()) {
+            lua.pushboolean(L, 1);
+            return 1;
+        }
+        lua.pushnil(L);
+        lua.pushstring(L, why.c_str());
+        return 2;
+    }
+    if (act == "hide" || act == "full" || act == "stock" || act == "auto") {
+        NightSkySetMode(act == "hide" ? NightSkyMode::Hide : act == "full" ? NightSkyMode::Full
+                        : act == "auto" ? NightSkyMode::Auto : NightSkyMode::Stock);
+        return 0;
+    }
+    if (act == "remove") {
+        NightSkyRemove();
+        return 0;
+    }
+    lua.pushstring(L, NightSkyStats().c_str());
+    return 1;
+}
+// ILARTS.rain(action)   (rain and snow in ILARTS's views; see rain.h)
+//   'install' -> true | nil, reason    'auto' / 'still' / 'hide' / 'stock'    'stats' -> line or ""    'remove'
+//   'temperature', celsius   the carrier's air temperature at sea level (nil = not known)
+int L_rain(lua_State* L) {
+    LogScope log;
+    const char* a = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
+    const std::string act = a ? a : "stats";
+    if (act == "install") {
+        std::string why = RainInstall();
+        if (why.empty()) {
+            lua.pushboolean(L, 1);
+            return 1;
+        }
+        lua.pushnil(L);
+        lua.pushstring(L, why.c_str());
+        return 2;
+    }
+    if (act == "auto" || act == "still" || act == "hide" || act == "stock") {
+        RainSetMode(act == "auto" ? RainMode::Auto : act == "still" ? RainMode::Still
+                    : act == "hide" ? RainMode::Hide : RainMode::Stock);
+        return 0;
+    }
+    if (act == "remove") {
+        RainRemove();
+        return 0;
+    }
+    if (act == "temperature") {
+        const bool known = lua.gettop(L) >= 2 && lua.type(L, 2) == 3;   // LUA_TNUMBER
+        RainSetCarrierTemperature(known, known ? lua.tonumber(L, 2) : 0.0);
+        return 0;
+    }
+    lua.pushstring(L, RainStats().c_str());
+    return 1;
+}
 // ILARTS.plat_cam(action, ...)   (synthetic PLAT camera; see plat_cam.h)
 //   'enable' -> true | nil, reason    'disable'    'select', x, y, z, type    'ship', "12 numbers"
 //   'stats' -> summary
@@ -794,6 +862,7 @@ int L_plat_cam(lua_State* L) {
 
 // ILARTS.plat_origin(action)   (PLAT render origin fix; see plat_origin.h)
 //   'install' -> true | nil, reason    'on' (= 'view') / 'frame' / 'off'    'stats' -> summary    'remove'
+//   'split_on' / 'split_off'   per-object origin split (origin_split.h; on by default, off only for A/B tests)
 int L_plat_origin(lua_State* L) {
     LogScope log;
     const char* a = lua.gettop(L) >= 1 ? lua.tolstring(L, 1, nullptr) : nullptr;
@@ -814,6 +883,10 @@ int L_plat_origin(lua_State* L) {
     }
     if (act == "remove") {
         PlatOriginRemove();
+        return 0;
+    }
+    if (act == "split_on" || act == "split_off") {
+        OriginSplitEnable(act == "split_on");
         return 0;
     }
     lua.pushstring(L, PlatOriginStats().c_str());
@@ -1080,7 +1153,7 @@ extern "C" __declspec(dllexport) int luaopen_ILARTS(lsodiag::lua_State* L) {
                {"share_camera_view", L_share_camera_view}, {"share_camera_views", L_share_camera_views}, {"share_mishap", L_share_mishap},
                {"share_retarget", L_share_retarget}, {"frame_count", L_frame_count}, {"rt_exists", L_rt_exists}, {"extra_cam", L_extra_cam},
                {"mfd_viewports", L_mfd_viewports}, {"mark_lsoframe", L_mark_lsoframe},
-               {"renderer_callbacks", L_renderer_callbacks}, {"lso_camera", L_lso_camera}, {"keep_plat", L_keep_plat}, {"plat_ui", L_plat_ui}, {"view_calls", L_view_calls}, {"clouds", L_clouds}, {"plat_origin", L_plat_origin}, {"map_objects", L_map_objects},{"memscan", L_memscan}, {"hull_scan", L_hull_scan}, {"hull_refresh", L_hull_refresh}, {"own_canopy", L_own_canopy},{"plat_cam", L_plat_cam}, {"sc_override", L_sc_override}, {"set_mfd_resolution", L_set_mfd_resolution}, {"log", L_log}, {"logpath", L_logpath}, {"launch_viewer", L_launch_viewer}};
+               {"renderer_callbacks", L_renderer_callbacks}, {"lso_camera", L_lso_camera}, {"keep_plat", L_keep_plat}, {"plat_ui", L_plat_ui}, {"view_calls", L_view_calls}, {"clouds", L_clouds}, {"plat_origin", L_plat_origin}, {"map_objects", L_map_objects},{"memscan", L_memscan}, {"hull_scan", L_hull_scan}, {"hull_refresh", L_hull_refresh}, {"own_canopy", L_own_canopy},{"night_sky", L_night_sky},{"rain", L_rain},{"plat_cam", L_plat_cam}, {"sc_override", L_sc_override}, {"set_mfd_resolution", L_set_mfd_resolution}, {"log", L_log}, {"logpath", L_logpath}, {"launch_viewer", L_launch_viewer}};
     for (const auto& f : fns) {
         lua.pushcclosure(L, f.fn, 0);
         lua.setfield(L, -2, f.name);
